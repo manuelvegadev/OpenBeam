@@ -7,9 +7,12 @@
 
 import Foundation
 import CoreVideo
+import AVFoundation
 import os
 
 final class NDISender: @unchecked Sendable {
+
+    static let sourceName = "CamNDI"
 
     private var ndiInstance: NDIlib_send_instance_t?
     private let queue = DispatchQueue(label: "com.camndi.ndi-send", qos: .userInteractive)
@@ -30,7 +33,7 @@ final class NDISender: @unchecked Sendable {
             return false
         }
 
-        let instance: NDIlib_send_instance_t? = "CamNDI".withCString { namePtr in
+        let instance: NDIlib_send_instance_t? = Self.sourceName.withCString { namePtr in
             var settings = NDIlib_send_create_t()
             settings.p_ndi_name = namePtr
             settings.p_groups = nil
@@ -46,7 +49,7 @@ final class NDISender: @unchecked Sendable {
         }
 
         queue.sync { ndiInstance = instance }
-        print("[CamNDI] NDI sender started — source name: CamNDI")
+        print("[CamNDI] NDI sender started — source name: \(Self.sourceName)")
         return true
     }
 
@@ -94,6 +97,50 @@ final class NDISender: @unchecked Sendable {
                 $0.sent += 1
                 $0.bytes += Int64(stride) * Int64(height)
             }
+        }
+    }
+
+    func send(audioBuffer buffer: AVAudioPCMBuffer) {
+        let instance: NDIlib_send_instance_t? = queue.sync { ndiInstance }
+        guard let instance else { return }
+
+        let format = buffer.format
+        guard format.commonFormat == .pcmFormatFloat32 else { return }
+
+        let numChannels = Int(format.channelCount)
+        let numSamples = Int(buffer.frameLength)
+        guard numChannels > 0, numSamples > 0 else { return }
+
+        var planar = [Float](repeating: 0, count: numSamples * numChannels)
+
+        planar.withUnsafeMutableBufferPointer { ptr in
+            guard let base = ptr.baseAddress else { return }
+
+            if let channelData = buffer.floatChannelData {
+                for ch in 0..<numChannels {
+                    (base + ch * numSamples).update(from: channelData[ch], count: numSamples)
+                }
+            } else if let src = buffer.audioBufferList.pointee.mBuffers.mData?.assumingMemoryBound(to: Float.self) {
+                for ch in 0..<numChannels {
+                    let dst = base + ch * numSamples
+                    for i in 0..<numSamples {
+                        dst[i] = src[i * numChannels + ch]
+                    }
+                }
+            } else {
+                return
+            }
+
+            var frame = NDIlib_audio_frame_v2_t()
+            frame.sample_rate = Int32(format.sampleRate)
+            frame.no_channels = Int32(numChannels)
+            frame.no_samples = Int32(numSamples)
+            frame.timecode = Int64(NDIlib_send_timecode_synthesize)
+            frame.p_data = base
+            frame.channel_stride_in_bytes = Int32(numSamples * MemoryLayout<Float>.size)
+            frame.p_metadata = nil
+            frame.timestamp = 0
+            NDIlib_send_send_audio_v2(instance, &frame)
         }
     }
 

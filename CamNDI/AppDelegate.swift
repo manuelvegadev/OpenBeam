@@ -6,6 +6,7 @@
 //
 
 import AppKit
+import AVFoundation
 import os
 
 @main
@@ -18,10 +19,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var menuIsOpen = false
 
     private let cameraController = CameraController()
+    private let audioController = AudioController()
     private let ndiSender = NDISender()
 
     private var cameraSubmenu: NSMenu!
+    private var audioSubmenu: NSMenu!
     private var statsSubmenu: NSMenu!
+
+    private var meterTrackLayer: CALayer!
+    private var meterFillLayer: CALayer!
+    private var levelTimer: Timer?
+    private var displayedLevel: Double = 0
+    private var meterBand: MeterBand = .normal
+
+    private enum MeterBand { case normal, warning, critical }
+    private static let meterColorNormal = NSColor.systemGreen.cgColor
+    private static let meterColorWarning = NSColor.systemYellow.cgColor
+    private static let meterColorCritical = NSColor.systemRed.cgColor
 
     // Stats
     private var statsTimer: Timer?
@@ -59,7 +73,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         statsTimer?.invalidate()
+        levelTimer?.invalidate()
         cameraController.stop()
+        audioController.stop()
         ndiSender.stop()
     }
 
@@ -124,6 +140,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         previewItem.view = container
         menu.addItem(previewItem)
 
+        // --- Audio level meter ---
+        let meterItem = NSMenuItem()
+        let meterHeight: CGFloat = 8
+        let meterWidth: CGFloat = 320
+        let containerHeight: CGFloat = 18
+        let meterContainer = NSView(frame: NSRect(x: 0, y: 0, width: 336, height: containerHeight))
+        meterContainer.wantsLayer = true
+
+        let meterY = (containerHeight - meterHeight) / 2
+
+        meterTrackLayer = CALayer()
+        meterTrackLayer.frame = CGRect(x: 8, y: meterY, width: meterWidth, height: meterHeight)
+        meterTrackLayer.backgroundColor = NSColor.white.withAlphaComponent(0.12).cgColor
+        meterTrackLayer.cornerRadius = meterHeight / 2
+        meterTrackLayer.cornerCurve = .continuous
+        meterTrackLayer.masksToBounds = true
+
+        meterFillLayer = CALayer()
+        meterFillLayer.frame = CGRect(x: 0, y: 0, width: 0, height: meterHeight)
+        meterFillLayer.backgroundColor = NSColor.systemGreen.cgColor
+        meterFillLayer.cornerRadius = meterHeight / 2
+        meterFillLayer.cornerCurve = .continuous
+        meterFillLayer.anchorPoint = .zero
+        meterTrackLayer.addSublayer(meterFillLayer)
+
+        meterContainer.layer?.addSublayer(meterTrackLayer)
+
+        meterItem.view = meterContainer
+        menu.addItem(meterItem)
+
         menu.addItem(.separator())
 
         // --- Camera selection submenu ---
@@ -133,10 +179,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         cameraItem.submenu = cameraSubmenu
         menu.addItem(cameraItem)
 
+        // --- Microphone selection submenu ---
+        let audioItem = NSMenuItem(title: "Microphone", action: nil, keyEquivalent: "")
+        audioSubmenu = NSMenu()
+        audioSubmenu.delegate = self
+        audioItem.submenu = audioSubmenu
+        menu.addItem(audioItem)
+
         menu.addItem(.separator())
 
         // --- NDI source label + restart ---
-        let ndiLabel = NSMenuItem(title: "NDI: CamNDI", action: nil, keyEquivalent: "")
+        let ndiLabel = NSMenuItem(title: "NDI: \(NDISender.sourceName)", action: nil, keyEquivalent: "")
         ndiLabel.isEnabled = false
         menu.addItem(ndiLabel)
 
@@ -185,13 +238,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         cameraController.onFrame = { [weak self] pixelBuffer in
             guard let self else { return }
 
-            // Lazy-start NDI on first camera frame so the source only appears
-            // on the network once we're actually producing video.
-            if !self.ndiSender.isActive {
-                if !self.ndiSender.start() {
-                    print("[CamNDI] NDI unavailable — camera preview only")
-                }
-            }
+            self.ensureNDIStarted()
 
             let w = CVPixelBufferGetWidth(pixelBuffer)
             let h = CVPixelBufferGetHeight(pixelBuffer)
@@ -213,7 +260,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        audioController.onAudio = { [weak self] buffer in
+            guard let self else { return }
+            self.ensureNDIStarted()
+            self.ndiSender.send(audioBuffer: buffer)
+        }
+
         cameraController.start()
+        audioController.start()
+    }
+
+    private func ensureNDIStarted() {
+        if !ndiSender.isActive {
+            if !ndiSender.start() {
+                print("[CamNDI] NDI unavailable")
+            }
+        }
     }
 
     // MARK: - Preview Helper
@@ -285,6 +347,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statsDroppedItem.title = "Dropped: \(formatCount(ndiSender.droppedFrames))"
     }
 
+    // MARK: - Audio Level Meter
+
+    private func startLevelTimer() {
+        guard levelTimer == nil else { return }
+        let timer = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+            self?.updateLevelMeter()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        levelTimer = timer
+    }
+
+    private func stopLevelTimer() {
+        levelTimer?.invalidate()
+        levelTimer = nil
+    }
+
+    private func updateLevelMeter() {
+        let peak = audioController.currentPeak
+        // Map linear peak → dBFS → 0…1 over the −60 dB to 0 dB range.
+        let target: Double
+        if peak > 0.0001 {
+            let db = 20.0 * Foundation.log10(Double(peak))
+            target = max(0, min(1, (db + 60.0) / 60.0))
+        } else {
+            target = 0
+        }
+        // Fast attack, smooth decay so the meter doesn't strobe.
+        if target >= displayedLevel {
+            displayedLevel = target
+        } else {
+            displayedLevel += (target - displayedLevel) * 0.3
+        }
+
+        let trackBounds = meterTrackLayer.bounds
+        let fillWidth = max(0, trackBounds.width * CGFloat(displayedLevel))
+
+        let band: MeterBand
+        if displayedLevel >= 0.95 { band = .critical }
+        else if displayedLevel >= 0.85 { band = .warning }
+        else { band = .normal }
+
+        // Disable implicit animations so the bar tracks the audio in real time.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        meterFillLayer.frame = CGRect(x: 0, y: 0, width: fillWidth, height: trackBounds.height)
+        if band != meterBand {
+            meterBand = band
+            switch band {
+            case .normal: meterFillLayer.backgroundColor = Self.meterColorNormal
+            case .warning: meterFillLayer.backgroundColor = Self.meterColorWarning
+            case .critical: meterFillLayer.backgroundColor = Self.meterColorCritical
+            }
+        }
+        CATransaction.commit()
+    }
+
     private func formatCount(_ n: Int64) -> String {
         if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1_000_000) }
         if n >= 1_000 { return String(format: "%.1fK", Double(n) / 1_000) }
@@ -305,6 +423,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let deviceID = sender.representedObject as? String else { return }
         cameraController.switchCamera(deviceID: deviceID)
     }
+
+    @objc private func selectAudio(_ sender: NSMenuItem) {
+        if let deviceID = sender.representedObject as? String {
+            audioController.switchInput(deviceID: deviceID)
+        } else {
+            audioController.stop()
+        }
+    }
 }
 
 // MARK: - NSMenuDelegate
@@ -312,35 +438,76 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 extension AppDelegate: NSMenuDelegate {
 
     func menuWillOpen(_ menu: NSMenu) {
-        if menu === statusItem.menu { menuIsOpen = true }
+        if menu === statusItem.menu {
+            menuIsOpen = true
+            startLevelTimer()
+        }
     }
 
     func menuDidClose(_ menu: NSMenu) {
-        if menu === statusItem.menu { menuIsOpen = false }
+        if menu === statusItem.menu {
+            menuIsOpen = false
+            stopLevelTimer()
+        }
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
-        guard menu === cameraSubmenu else { return }
+        if menu === cameraSubmenu {
+            updateCameraSubmenu(menu)
+        } else if menu === audioSubmenu {
+            updateAudioSubmenu(menu)
+        }
+    }
 
+    private func updateCameraSubmenu(_ menu: NSMenu) {
+        populateDeviceMenu(menu,
+                           devices: CameraController.availableCameras,
+                           currentID: cameraController.currentDeviceID,
+                           action: #selector(selectCamera(_:)),
+                           includeNone: false,
+                           emptyText: "No cameras found")
+    }
+
+    private func updateAudioSubmenu(_ menu: NSMenu) {
+        populateDeviceMenu(menu,
+                           devices: AudioController.availableInputs,
+                           currentID: audioController.currentDeviceID,
+                           action: #selector(selectAudio(_:)),
+                           includeNone: true,
+                           emptyText: "No microphones found")
+    }
+
+    private func populateDeviceMenu(_ menu: NSMenu,
+                                    devices: [AVCaptureDevice],
+                                    currentID: String?,
+                                    action: Selector,
+                                    includeNone: Bool,
+                                    emptyText: String) {
         menu.removeAllItems()
 
-        let cameras = CameraController.availableCameras
-        let currentID = cameraController.currentDeviceID
+        if includeNone {
+            let noneItem = NSMenuItem(title: "None", action: action, keyEquivalent: "")
+            noneItem.target = self
+            noneItem.representedObject = nil
+            noneItem.state = (currentID == nil) ? .on : .off
+            menu.addItem(noneItem)
+            if !devices.isEmpty {
+                menu.addItem(.separator())
+            }
+        }
 
-        for device in cameras {
-            let item = NSMenuItem(title: device.localizedName,
-                                  action: #selector(selectCamera(_:)),
-                                  keyEquivalent: "")
+        for device in devices {
+            let item = NSMenuItem(title: device.localizedName, action: action, keyEquivalent: "")
             item.target = self
             item.representedObject = device.uniqueID
             item.state = (device.uniqueID == currentID) ? .on : .off
             menu.addItem(item)
         }
 
-        if cameras.isEmpty {
-            let none = NSMenuItem(title: "No cameras found", action: nil, keyEquivalent: "")
-            none.isEnabled = false
-            menu.addItem(none)
+        if devices.isEmpty {
+            let placeholder = NSMenuItem(title: emptyText, action: nil, keyEquivalent: "")
+            placeholder.isEnabled = false
+            menu.addItem(placeholder)
         }
     }
 }

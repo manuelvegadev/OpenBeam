@@ -22,6 +22,8 @@
 	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>CamNDI needs camera access to capture and broadcast video over NDI.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>CamNDI needs microphone access to capture and broadcast audio over NDI.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>CamNDI uses the local network to broadcast NDI video to other devices.</string>
 	<key>NSBonjourServices</key>
