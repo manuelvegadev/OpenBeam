@@ -1,6 +1,6 @@
 //
 //  ClipSyncDiscovery.swift
-//  CamNDI
+//  Open Beam
 //
 //  mDNS advertise + browse for ClipSync v1 (`_clipsync._tcp`). Filters out our
 //  own peerID and dedupes peers across multiple network interfaces.
@@ -18,7 +18,7 @@ final class ClipSyncDiscovery: @unchecked Sendable {
     /// Endpoint of an incoming connection — the manager attaches a Connection wrapper.
     var onIncomingConnection: ((NWConnection) -> Void)?
 
-    private let queue = DispatchQueue(label: "com.camndi.clipsync.io", qos: .utility)
+    private let queue = DispatchQueue(label: "com.openbeam.clipsync.io", qos: .utility)
     private let lock = OSAllocatedUnfairLock(initialState: State())
 
     private struct State {
@@ -69,7 +69,7 @@ final class ClipSyncDiscovery: @unchecked Sendable {
         do {
             listener = try NWListener(using: params)
         } catch {
-            print("[CamNDI] ClipSync listener init failed: \(error)")
+            print("[Open Beam] ClipSync listener init failed: \(error)")
             return
         }
         listener.service = service
@@ -79,11 +79,11 @@ final class ClipSyncDiscovery: @unchecked Sendable {
             case .ready:
                 if let p = listener.port?.rawValue {
                     self?.lock.withLock { $0.advertisedPort = p }
-                    print("[CamNDI] ClipSync listening on TCP \(p), advertising \(ClipSync.serviceType) as \(self?.identity.peerID ?? "?")")
+                    print("[Open Beam] ClipSync listening on TCP \(p), advertising \(ClipSync.serviceType) as \(self?.identity.peerID ?? "?")")
                     self?.startBrowser()
                 }
             case .failed(let err):
-                print("[CamNDI] ClipSync listener failed: \(err)")
+                print("[Open Beam] ClipSync listener failed: \(err)")
             case .cancelled:
                 break
             default:
@@ -118,7 +118,7 @@ final class ClipSyncDiscovery: @unchecked Sendable {
         let browser = NWBrowser(for: descriptor, using: params)
         browser.stateUpdateHandler = { state in
             if case .failed(let err) = state {
-                print("[CamNDI] ClipSync browser failed: \(err)")
+                print("[Open Beam] ClipSync browser failed: \(err)")
             }
         }
         browser.browseResultsChangedHandler = { [weak self] results, _ in

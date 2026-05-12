@@ -1,6 +1,6 @@
 //
 //  NDISender.swift
-//  CamNDI
+//  Open Beam
 //
 //  NDI SDK C API bridge and frame sending.
 //
@@ -12,10 +12,10 @@ import os
 
 final class NDISender: @unchecked Sendable {
 
-    static let sourceName = "CamNDI"
+    static let sourceName = "Open Beam"
 
     private var ndiInstance: NDIlib_send_instance_t?
-    private let queue = DispatchQueue(label: "com.camndi.ndi-send", qos: .userInteractive)
+    private let queue = DispatchQueue(label: "com.openbeam.ndi-send", qos: .userInteractive)
     private let semaphore = DispatchSemaphore(value: 1)
 
     // Stats — protected by statsLock (written on NDI/capture queues, read on main)
@@ -29,7 +29,7 @@ final class NDISender: @unchecked Sendable {
 
     func start() -> Bool {
         guard NDIlib_initialize() else {
-            print("[CamNDI] NDIlib_initialize failed")
+            print("[Open Beam] NDIlib_initialize failed")
             return false
         }
 
@@ -43,13 +43,13 @@ final class NDISender: @unchecked Sendable {
         }
 
         guard let instance else {
-            print("[CamNDI] NDIlib_send_create failed")
+            print("[Open Beam] NDIlib_send_create failed")
             NDIlib_destroy()
             return false
         }
 
         queue.sync { ndiInstance = instance }
-        print("[CamNDI] NDI sender started — source name: \(Self.sourceName)")
+        print("[Open Beam] NDI sender started — source name: \(Self.sourceName)")
         return true
     }
 
@@ -163,7 +163,7 @@ final class NDISender: @unchecked Sendable {
             }
             NDIlib_destroy()
         }
-        print("[CamNDI] NDI sender stopped")
+        print("[Open Beam] NDI sender stopped")
     }
 
     deinit {

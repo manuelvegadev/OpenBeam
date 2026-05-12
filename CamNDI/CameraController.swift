@@ -1,6 +1,6 @@
 //
 //  CameraController.swift
-//  CamNDI
+//  Open Beam
 //
 //  AVCaptureSession setup and video frame delivery.
 //
@@ -10,7 +10,7 @@ import AVFoundation
 final class CameraController: NSObject, @unchecked Sendable {
 
     private let session = AVCaptureSession()
-    private let outputQueue = DispatchQueue(label: "com.camndi.capture", qos: .userInteractive)
+    private let outputQueue = DispatchQueue(label: "com.openbeam.capture", qos: .userInteractive)
     private var currentInput: AVCaptureDeviceInput?
     private(set) var currentDeviceID: String?
 
@@ -33,7 +33,7 @@ final class CameraController: NSObject, @unchecked Sendable {
         }
 
         guard let device else {
-            print("[CamNDI] No camera found")
+            print("[Open Beam] No camera found")
             return
         }
 
@@ -54,7 +54,7 @@ final class CameraController: NSObject, @unchecked Sendable {
                 currentDeviceID = device.uniqueID
             }
         } catch {
-            print("[CamNDI] Camera input error: \(error)")
+            print("[Open Beam] Camera input error: \(error)")
             session.commitConfiguration()
             return
         }
@@ -79,7 +79,7 @@ final class CameraController: NSObject, @unchecked Sendable {
             session.startRunning()
         }
 
-        print("[CamNDI] Camera started: \(device.localizedName)")
+        print("[Open Beam] Camera started: \(device.localizedName)")
     }
 
     func switchCamera(deviceID: String) {

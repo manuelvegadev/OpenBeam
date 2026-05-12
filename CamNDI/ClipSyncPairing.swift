@@ -1,6 +1,6 @@
 //
 //  ClipSyncPairing.swift
-//  CamNDI
+//  Open Beam
 //
 //  KDE-Connect-style pairing UX. The connection-handshake math (verification
 //  code, fingerprint) lives in ClipSyncConnection; this file owns only the

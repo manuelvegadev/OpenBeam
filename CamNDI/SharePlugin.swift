@@ -1,6 +1,6 @@
 //
 //  SharePlugin.swift
-//  CamNDI
+//  Open Beam
 //
 //  File transfer over the encrypted ClipSync channel. Sends file URLs found
 //  on the local pasteboard as `share.begin` + `share.chunk*` + `share.end`;
@@ -40,7 +40,7 @@ final class SharePlugin: @unchecked Sendable {
 
     private static let cacheRoot: URL = {
         let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-        let dir = base.appendingPathComponent("CamNDI/clipsync", isDirectory: true)
+        let dir = base.appendingPathComponent("OpenBeam/clipsync", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }()
@@ -59,7 +59,7 @@ final class SharePlugin: @unchecked Sendable {
 
     private func broadcastFiles(_ urls: [URL]) {
         guard urls.count <= ClipSync.maxShareFileCount else {
-            print("[CamNDI] ClipSync share: \(urls.count) files exceeds cap \(ClipSync.maxShareFileCount)")
+            print("[Open Beam] ClipSync share: \(urls.count) files exceeds cap \(ClipSync.maxShareFileCount)")
             return
         }
 
@@ -72,16 +72,16 @@ final class SharePlugin: @unchecked Sendable {
                   let size = attrs[.size] as? NSNumber,
                   let kind = attrs[.type] as? FileAttributeType,
                   kind == .typeRegular else {
-                print("[CamNDI] ClipSync share: skipping unreadable URL \(url.path)")
+                print("[Open Beam] ClipSync share: skipping unreadable URL \(url.path)")
                 return
             }
             total &+= size.int64Value
             if total > ClipSync.maxShareTotalBytes {
-                print("[CamNDI] ClipSync share: total \(total) B exceeds cap \(ClipSync.maxShareTotalBytes) — skipping")
+                print("[Open Beam] ClipSync share: total \(total) B exceeds cap \(ClipSync.maxShareTotalBytes) — skipping")
                 return
             }
             guard let sha = Self.sha256Hex(of: resolved) else {
-                print("[CamNDI] ClipSync share: hash failed for \(url.path)")
+                print("[Open Beam] ClipSync share: hash failed for \(url.path)")
                 return
             }
             metas.append(ShareFileMeta(name: resolved.lastPathComponent, size: size.int64Value, sha256: sha))

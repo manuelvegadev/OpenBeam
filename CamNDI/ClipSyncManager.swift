@@ -1,6 +1,6 @@
 //
 //  ClipSyncManager.swift
-//  CamNDI
+//  Open Beam
 //
 //  Top-level coordinator for ClipSync: owns identity + discovery + plugins,
 //  manages live connections per peer, exposes the menu-facing API.
@@ -19,7 +19,7 @@ final class ClipSyncManager: NSObject, @unchecked Sendable {
     private let discovery: ClipSyncDiscovery
     private let clipboard: ClipboardPlugin
     private let share: SharePlugin
-    private let ioQueue = DispatchQueue(label: "com.camndi.clipsync.io", qos: .utility)
+    private let ioQueue = DispatchQueue(label: "com.openbeam.clipsync.io", qos: .utility)
 
     // MARK: - Public state
 
@@ -249,7 +249,7 @@ extension ClipSyncManager: ClipSyncConnectionDelegate {
               ack.peerID == peerHello.peerID,
               ack.sigPub == peerHello.sigPub,
               ack.kxPub == peerHello.kxPub else {
-            print("[CamNDI] ClipSync pair_accept identity mismatch — aborting")
+            print("[Open Beam] ClipSync pair_accept identity mismatch — aborting")
             c.cancel()
             return
         }
@@ -274,7 +274,7 @@ extension ClipSyncManager: ClipSyncConnectionDelegate {
     }
 
     func connection(_ c: ClipSyncConnection, didReceivePairReject rej: PairRejectFrame) {
-        print("[CamNDI] ClipSync pair_reject: \(rej.reason)")
+        print("[Open Beam] ClipSync pair_reject: \(rej.reason)")
         c.cancel()
     }
 
@@ -302,7 +302,7 @@ extension ClipSyncManager: ClipSyncConnectionDelegate {
 
     func connectionDidClose(_ c: ClipSyncConnection, error: Error?) {
         if let error {
-            print("[CamNDI] ClipSync connection closed with error: \(error)")
+            print("[Open Beam] ClipSync connection closed with error: \(error)")
         }
         let peerID = c.peerID
         lock.withLock { state in

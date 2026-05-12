@@ -1,6 +1,6 @@
 //
 //  ClipSyncIdentity.swift
-//  CamNDI
+//  Open Beam
 //
 //  Long-term identity (Ed25519 signing key + X25519 key-exchange key) and
 //  paired-peer persistence for ClipSync v1. Private keys live in the Keychain
@@ -57,9 +57,9 @@ final class ClipSyncIdentity: @unchecked Sendable {
         var pairedPeers: [PairedPeer] = []
     }
 
-    private static let keychainTag = "com.camndi.clipsync.identity.v1"
-    private static let peerIDKey = "com.camndi.clipsync.deviceID"
-    private static let pairedPeersKey = "com.camndi.clipsync.peers.v1"
+    private static let keychainTag = "com.openbeam.clipsync.identity.v1"
+    private static let peerIDKey = "com.openbeam.clipsync.deviceID"
+    private static let pairedPeersKey = "com.openbeam.clipsync.peers.v1"
 
     // MARK: - Lifecycle
 
@@ -166,7 +166,7 @@ final class ClipSyncIdentity: @unchecked Sendable {
                 let kx = try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: blob.suffix(32))
                 return (sig, kx)
             } catch {
-                print("[CamNDI] ClipSync identity blob corrupt — regenerating: \(error)")
+                print("[Open Beam] ClipSync identity blob corrupt — regenerating: \(error)")
             }
         }
         let sig = Curve25519.Signing.PrivateKey()
@@ -183,7 +183,7 @@ final class ClipSyncIdentity: @unchecked Sendable {
         do {
             return try JSONDecoder().decode([PairedPeer].self, from: data)
         } catch {
-            print("[CamNDI] ClipSync paired peers blob corrupt — clearing: \(error)")
+            print("[Open Beam] ClipSync paired peers blob corrupt — clearing: \(error)")
             return []
         }
     }
@@ -193,7 +193,7 @@ final class ClipSyncIdentity: @unchecked Sendable {
             let data = try JSONEncoder().encode(peers)
             UserDefaults.standard.set(data, forKey: pairedPeersKey)
         } catch {
-            print("[CamNDI] ClipSync failed to persist paired peers: \(error)")
+            print("[Open Beam] ClipSync failed to persist paired peers: \(error)")
         }
     }
 
@@ -211,7 +211,7 @@ final class ClipSyncIdentity: @unchecked Sendable {
         let status = SecItemCopyMatching(q as CFDictionary, &out)
         if status == errSecSuccess { return out as? Data }
         if status != errSecItemNotFound {
-            print("[CamNDI] ClipSync keychain load: OSStatus \(status)")
+            print("[Open Beam] ClipSync keychain load: OSStatus \(status)")
         }
         return nil
     }
@@ -232,7 +232,7 @@ final class ClipSyncIdentity: @unchecked Sendable {
             status = SecItemAdd(add as CFDictionary, nil)
         }
         if status != errSecSuccess {
-            print("[CamNDI] ClipSync keychain save: OSStatus \(status)")
+            print("[Open Beam] ClipSync keychain save: OSStatus \(status)")
         }
     }
 }

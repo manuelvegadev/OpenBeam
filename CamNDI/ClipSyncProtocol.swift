@@ -1,6 +1,6 @@
 //
 //  ClipSyncProtocol.swift
-//  CamNDI
+//  Open Beam
 //
 //  ClipSync v1 wire-protocol model: packet types, JSON envelope, length-prefix
 //  framing, protocol constants. The canonical specification lives in

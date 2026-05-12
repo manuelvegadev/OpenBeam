@@ -1,6 +1,6 @@
 //
 //  AppDelegate.swift
-//  CamNDI
+//  Open Beam
 //
 //  NSStatusItem tray icon and menu — app entry point.
 //
@@ -101,9 +101,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 button.image = icon
             } else {
                 button.image = NSImage(systemSymbolName: "camera.fill",
-                                       accessibilityDescription: "CamNDI")
+                                       accessibilityDescription: "Open Beam")
             }
-            button.setAccessibilityLabel("CamNDI")
+            button.setAccessibilityLabel("Open Beam")
         }
 
         let menu = NSMenu()
@@ -113,7 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let headerItem = NSMenuItem()
         let headerView = NSView(frame: NSRect(x: 0, y: 0, width: 336, height: 30))
 
-        let titleLabel = NSTextField(labelWithString: "CamNDI")
+        let titleLabel = NSTextField(labelWithString: "Open Beam")
         titleLabel.font = .boldSystemFont(ofSize: 13)
         titleLabel.textColor = .labelColor
         titleLabel.sizeToFit()
@@ -235,7 +235,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
 
         // --- Quit ---
-        let quitItem = NSMenuItem(title: "Quit CamNDI",
+        let quitItem = NSMenuItem(title: "Quit Open Beam",
                                   action: #selector(NSApplication.terminate(_:)),
                                   keyEquivalent: "q")
         menu.addItem(quitItem)
@@ -291,7 +291,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func ensureNDIStarted() {
         if !ndiSender.isActive {
             if !ndiSender.start() {
-                print("[CamNDI] NDI unavailable")
+                print("[Open Beam] NDI unavailable")
             }
         }
     }

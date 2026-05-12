@@ -1,6 +1,6 @@
 //
 //  AudioController.swift
-//  CamNDI
+//  Open Beam
 //
 //  AVAudioEngine-based audio capture. We use AVAudioEngine instead of
 //  AVCaptureAudioDataOutput because the latter's audioSettings path on macOS
@@ -48,7 +48,7 @@ final class AudioController: NSObject, @unchecked Sendable {
             }
             return
         case .denied, .restricted:
-            print("[CamNDI] Microphone access not authorized")
+            print("[Open Beam] Microphone access not authorized")
             return
         default:
             break
@@ -62,7 +62,7 @@ final class AudioController: NSObject, @unchecked Sendable {
         }
 
         guard let device else {
-            print("[CamNDI] No audio device found")
+            print("[Open Beam] No audio device found")
             return
         }
 
@@ -83,7 +83,7 @@ final class AudioController: NSObject, @unchecked Sendable {
 
         let format = input.outputFormat(forBus: 0)
         guard format.channelCount > 0 else {
-            print("[CamNDI] Input format reports 0 channels — engine will not deliver audio")
+            print("[Open Beam] Input format reports 0 channels — engine will not deliver audio")
             return
         }
 
@@ -98,9 +98,9 @@ final class AudioController: NSObject, @unchecked Sendable {
             try engine.start()
             self.engine = engine
             self.currentDeviceID = device.uniqueID
-            print("[CamNDI] Audio started: \(device.localizedName) — \(Int(format.sampleRate)) Hz, \(format.channelCount) ch")
+            print("[Open Beam] Audio started: \(device.localizedName) — \(Int(format.sampleRate)) Hz, \(format.channelCount) ch")
         } catch {
-            print("[CamNDI] AVAudioEngine start failed: \(error)")
+            print("[Open Beam] AVAudioEngine start failed: \(error)")
             input.removeTap(onBus: 0)
         }
     }

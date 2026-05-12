@@ -1,6 +1,6 @@
 //
 //  ClipSyncConnection.swift
-//  CamNDI
+//  Open Beam
 //
 //  One TCP NWConnection per peer. Owns the cleartext hello handshake, the
 //  ECDH+HKDF session-key derivation, the ChaCha20-Poly1305 frame seal/open,
@@ -55,7 +55,7 @@ final class ClipSyncConnection: @unchecked Sendable {
 
     private let identity: ClipSyncIdentity
     private let connection: NWConnection
-    private let queue = DispatchQueue(label: "com.camndi.clipsync.io", qos: .utility)
+    private let queue = DispatchQueue(label: "com.openbeam.clipsync.io", qos: .utility)
     private let decoder = ClipSyncFraming.Decoder()
 
     private let lock = OSAllocatedUnfairLock(initialState: State())

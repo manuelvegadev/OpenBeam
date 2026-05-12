@@ -1,6 +1,6 @@
 //
 //  ClipboardPlugin.swift
-//  CamNDI
+//  Open Beam
 //
 //  Pasteboard polling + text-clipboard send/receive. Owns the shared
 //  PasteboardWatcher (a 0.4s timer that hops to main); SharePlugin subscribes
@@ -175,7 +175,7 @@ final class ClipboardPlugin: @unchecked Sendable {
         let utf8 = Data(s.utf8)
         guard !utf8.isEmpty, utf8.count <= ClipSync.maxTextBytes else {
             if utf8.count > ClipSync.maxTextBytes {
-                print("[CamNDI] ClipSync: skipping text \(utf8.count) B (cap \(ClipSync.maxTextBytes))")
+                print("[Open Beam] ClipSync: skipping text \(utf8.count) B (cap \(ClipSync.maxTextBytes))")
             }
             return
         }
