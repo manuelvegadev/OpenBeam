@@ -25,10 +25,11 @@
 	<key>NSMicrophoneUsageDescription</key>
 	<string>CamNDI needs microphone access to capture and broadcast audio over NDI.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>CamNDI uses the local network to broadcast NDI video to other devices.</string>
+	<string>CamNDI uses the local network to broadcast NDI video to other devices and to synchronize the clipboard with paired devices.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_ndi._tcp</string>
+		<string>_clipsync._tcp</string>
 	</array>
 	<key>NSHumanReadableCopyright</key>
 	<string></string>

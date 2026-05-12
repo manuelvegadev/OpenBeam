@@ -21,9 +21,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let cameraController = CameraController()
     private let audioController = AudioController()
     private let ndiSender = NDISender()
+    private let clipSyncManager = ClipSyncManager()
 
     private var cameraSubmenu: NSMenu!
     private var audioSubmenu: NSMenu!
+    private var clipboardSubmenu: NSMenu!
     private var statsSubmenu: NSMenu!
 
     private var meterTrackLayer: CALayer!
@@ -69,6 +71,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         buildStatusItem()
         startPipeline()
         startStatsTimer()
+        clipSyncManager.onStateChanged = { [weak self] in
+            // No persistent submenu items to mutate eagerly; the menu rebuilds on open.
+            _ = self
+        }
+        clipSyncManager.onPairRequestPresented = { [weak self] in
+            self?.statusItem.menu?.cancelTracking()
+        }
+        clipSyncManager.start()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -77,6 +87,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         cameraController.stop()
         audioController.stop()
         ndiSender.stop()
+        clipSyncManager.stop()
     }
 
     // MARK: - Status Bar Menu
@@ -185,6 +196,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         audioSubmenu.delegate = self
         audioItem.submenu = audioSubmenu
         menu.addItem(audioItem)
+
+        // --- Clipboard sync submenu ---
+        let clipboardItem = NSMenuItem(title: "Clipboard Sync", action: nil, keyEquivalent: "")
+        clipboardSubmenu = NSMenu()
+        clipboardSubmenu.delegate = self
+        clipboardItem.submenu = clipboardSubmenu
+        menu.addItem(clipboardItem)
 
         menu.addItem(.separator())
 
@@ -431,6 +449,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             audioController.stop()
         }
     }
+
+    @objc private func toggleClipboardSync(_ sender: NSMenuItem) {
+        clipSyncManager.isEnabled.toggle()
+    }
+
+    @objc private func requestClipSyncPair(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String,
+              let peer = clipSyncManager.discoveredPeers.first(where: { $0.peerID == id }) else { return }
+        clipSyncManager.requestPair(with: peer)
+    }
+
+    @objc private func unpairClipSync(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String,
+              let peer = clipSyncManager.pairedPeers.first(where: { $0.peerID == id }) else { return }
+        let alert = NSAlert()
+        alert.messageText = "Forget \"\(peer.displayName)\"?"
+        alert.informativeText = "You'll need to pair again to resume clipboard sync."
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Forget")
+        if alert.runModal() == .alertSecondButtonReturn {
+            clipSyncManager.unpair(peerID: id)
+        }
+    }
 }
 
 // MARK: - NSMenuDelegate
@@ -456,6 +497,69 @@ extension AppDelegate: NSMenuDelegate {
             updateCameraSubmenu(menu)
         } else if menu === audioSubmenu {
             updateAudioSubmenu(menu)
+        } else if menu === clipboardSubmenu {
+            updateClipboardSubmenu(menu)
+        }
+    }
+
+    private func updateClipboardSubmenu(_ menu: NSMenu) {
+        menu.removeAllItems()
+
+        // --- Enabled toggle ---
+        let toggle = NSMenuItem(title: "Enabled",
+                                action: #selector(toggleClipboardSync(_:)),
+                                keyEquivalent: "")
+        toggle.target = self
+        toggle.state = clipSyncManager.isEnabled ? .on : .off
+        menu.addItem(toggle)
+
+        menu.addItem(.separator())
+
+        // --- Discovered (unpaired) ---
+        let discoveredHeader = NSMenuItem(title: "Discovered", action: nil, keyEquivalent: "")
+        discoveredHeader.isEnabled = false
+        menu.addItem(discoveredHeader)
+
+        let pairedIDs = Set(clipSyncManager.pairedPeers.map(\.peerID))
+        let unpairedDiscovered = clipSyncManager.discoveredPeers.filter { !pairedIDs.contains($0.peerID) }
+
+        if unpairedDiscovered.isEmpty {
+            let placeholder = NSMenuItem(title: "    No devices found", action: nil, keyEquivalent: "")
+            placeholder.isEnabled = false
+            menu.addItem(placeholder)
+        } else {
+            for peer in unpairedDiscovered {
+                let title = "    \(peer.displayName) (\(peer.os))"
+                let item = NSMenuItem(title: title,
+                                      action: #selector(requestClipSyncPair(_:)),
+                                      keyEquivalent: "")
+                item.target = self
+                item.representedObject = peer.peerID
+                menu.addItem(item)
+            }
+        }
+
+        menu.addItem(.separator())
+
+        // --- Paired ---
+        let pairedHeader = NSMenuItem(title: "Paired", action: nil, keyEquivalent: "")
+        pairedHeader.isEnabled = false
+        menu.addItem(pairedHeader)
+
+        if clipSyncManager.pairedPeers.isEmpty {
+            let placeholder = NSMenuItem(title: "    No paired devices", action: nil, keyEquivalent: "")
+            placeholder.isEnabled = false
+            menu.addItem(placeholder)
+        } else {
+            for peer in clipSyncManager.pairedPeers.sorted(by: { $0.displayName < $1.displayName }) {
+                let title = "    \(peer.displayName) (\(peer.os)) — Forget"
+                let item = NSMenuItem(title: title,
+                                      action: #selector(unpairClipSync(_:)),
+                                      keyEquivalent: "")
+                item.target = self
+                item.representedObject = peer.peerID
+                menu.addItem(item)
+            }
         }
     }
 
