@@ -29,5 +29,5 @@ jobs:
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: build/CamNDI.dmg
+          files: build/OpenBeam.dmg
           generate_release_notes: true

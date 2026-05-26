@@ -449,7 +449,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Actions
 
     @objc private func openGitHub(_ sender: Any) {
-        NSWorkspace.shared.open(URL(string: "https://github.com/manuelvegadev/CamNDI")!)
+        NSWorkspace.shared.open(URL(string: "https://github.com/manuelvegadev/OpenBeam")!)
     }
 
     @objc private func restartNDISender(_ sender: NSMenuItem) {

@@ -2,11 +2,11 @@
 set -euo pipefail
 
 # ─── Config ───────────────────────────────────────────────────────────
-APP_NAME="CamNDI"
-SCHEME="CamNDI"
+APP_NAME="OpenBeam"
+SCHEME="OpenBeam"
 CONFIG="Release"
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-PROJECT="$PROJECT_DIR/CamNDI.xcodeproj"
+PROJECT="$PROJECT_DIR/OpenBeam.xcodeproj"
 BUILD_DIR="$PROJECT_DIR/build"
 DMG_DIR="$BUILD_DIR/dmg"
 APP_PATH="$BUILD_DIR/$APP_NAME.app"
@@ -85,4 +85,4 @@ rm -rf "$DMG_DIR"
 DMG_SIZE=$(du -h "$DMG_PATH" | cut -f1 | xargs)
 echo ""
 echo "==> Done! $DMG_PATH ($DMG_SIZE)"
-echo "    Drag CamNDI.app to Applications to install."
+echo "    Drag $APP_NAME.app to Applications to install."

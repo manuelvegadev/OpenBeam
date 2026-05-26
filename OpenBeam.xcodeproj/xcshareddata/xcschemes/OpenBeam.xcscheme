@@ -16,9 +16,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "07C1A0AB2F688E8C00C646CC"
-               BuildableName = "CamNDI.app"
-               BlueprintName = "CamNDI"
-               ReferencedContainer = "container:CamNDI.xcodeproj">
+               BuildableName = "OpenBeam.app"
+               BlueprintName = "OpenBeam"
+               ReferencedContainer = "container:OpenBeam.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -45,9 +45,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "07C1A0AB2F688E8C00C646CC"
-            BuildableName = "CamNDI.app"
-            BlueprintName = "CamNDI"
-            ReferencedContainer = "container:CamNDI.xcodeproj">
+            BuildableName = "OpenBeam.app"
+            BlueprintName = "OpenBeam"
+            ReferencedContainer = "container:OpenBeam.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
       <EnvironmentVariables>
@@ -74,9 +74,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "07C1A0AB2F688E8C00C646CC"
-            BuildableName = "CamNDI.app"
-            BlueprintName = "CamNDI"
-            ReferencedContainer = "container:CamNDI.xcodeproj">
+            BuildableName = "OpenBeam.app"
+            BlueprintName = "OpenBeam"
+            ReferencedContainer = "container:OpenBeam.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>

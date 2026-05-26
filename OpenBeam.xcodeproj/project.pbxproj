@@ -7,13 +7,13 @@
 	objects = {
 
 /* Begin PBXFileReference section */
-		07C1A0AC2F688E8C00C646CC /* CamNDI.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CamNDI.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		07C1A0AC2F688E8C00C646CC /* OpenBeam.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = OpenBeam.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		07C1A0AE2F688E8C00C646CC /* CamNDI */ = {
+		07C1A0AE2F688E8C00C646CC /* OpenBeam */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = CamNDI;
+			path = OpenBeam;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -32,7 +32,7 @@
 		07C1A0A32F688E8C00C646CC = {
 			isa = PBXGroup;
 			children = (
-				07C1A0AE2F688E8C00C646CC /* CamNDI */,
+				07C1A0AE2F688E8C00C646CC /* OpenBeam */,
 				07C1A0AD2F688E8C00C646CC /* Products */,
 			);
 			sourceTree = "<group>";
@@ -40,7 +40,7 @@
 		07C1A0AD2F688E8C00C646CC /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				07C1A0AC2F688E8C00C646CC /* CamNDI.app */,
+				07C1A0AC2F688E8C00C646CC /* OpenBeam.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -48,9 +48,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		07C1A0AB2F688E8C00C646CC /* CamNDI */ = {
+		07C1A0AB2F688E8C00C646CC /* OpenBeam */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 07C1A0B72F688E8D00C646CC /* Build configuration list for PBXNativeTarget "CamNDI" */;
+			buildConfigurationList = 07C1A0B72F688E8D00C646CC /* Build configuration list for PBXNativeTarget "OpenBeam" */;
 			buildPhases = (
 				07C1A0A82F688E8C00C646CC /* Sources */,
 				07C1A0A92F688E8C00C646CC /* Frameworks */,
@@ -62,13 +62,13 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				07C1A0AE2F688E8C00C646CC /* CamNDI */,
+				07C1A0AE2F688E8C00C646CC /* OpenBeam */,
 			);
-			name = CamNDI;
+			name = OpenBeam;
 			packageProductDependencies = (
 			);
-			productName = CamNDI;
-			productReference = 07C1A0AC2F688E8C00C646CC /* CamNDI.app */;
+			productName = OpenBeam;
+			productReference = 07C1A0AC2F688E8C00C646CC /* OpenBeam.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -86,7 +86,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 07C1A0A72F688E8C00C646CC /* Build configuration list for PBXProject "CamNDI" */;
+			buildConfigurationList = 07C1A0A72F688E8C00C646CC /* Build configuration list for PBXProject "OpenBeam" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -100,7 +100,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				07C1A0AB2F688E8C00C646CC /* CamNDI */,
+				07C1A0AB2F688E8C00C646CC /* OpenBeam */,
 			);
 		};
 /* End PBXProject section */
@@ -272,7 +272,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = CamNDI/CamNDI.entitlements;
+				CODE_SIGN_ENTITLEMENTS = OpenBeam/OpenBeam.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -289,10 +289,10 @@
 				LIBRARY_SEARCH_PATHS = "$(PROJECT_DIR)/NDI";
 				MARKETING_VERSION = 1.0;
 				OTHER_LDFLAGS = "-lndi";
-				PRODUCT_BUNDLE_IDENTIFIER = manuelvegadev.CamNDI;
+				PRODUCT_BUNDLE_IDENTIFIER = manuelvegadev.OpenBeam;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = CamNDI/BridgingHeader.h;
+				SWIFT_OBJC_BRIDGING_HEADER = OpenBeam/BridgingHeader.h;
 				SWIFT_VERSION = 5.0;
 			};
 			name = Debug;
@@ -302,7 +302,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = CamNDI/CamNDI.entitlements;
+				CODE_SIGN_ENTITLEMENTS = OpenBeam/OpenBeam.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -319,10 +319,10 @@
 				LIBRARY_SEARCH_PATHS = "$(PROJECT_DIR)/NDI";
 				MARKETING_VERSION = 1.0;
 				OTHER_LDFLAGS = "-lndi";
-				PRODUCT_BUNDLE_IDENTIFIER = manuelvegadev.CamNDI;
+				PRODUCT_BUNDLE_IDENTIFIER = manuelvegadev.OpenBeam;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = CamNDI/BridgingHeader.h;
+				SWIFT_OBJC_BRIDGING_HEADER = OpenBeam/BridgingHeader.h;
 				SWIFT_VERSION = 5.0;
 			};
 			name = Release;
@@ -330,7 +330,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		07C1A0A72F688E8C00C646CC /* Build configuration list for PBXProject "CamNDI" */ = {
+		07C1A0A72F688E8C00C646CC /* Build configuration list for PBXProject "OpenBeam" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				07C1A0B52F688E8D00C646CC /* Debug */,
@@ -339,7 +339,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		07C1A0B72F688E8D00C646CC /* Build configuration list for PBXNativeTarget "CamNDI" */ = {
+		07C1A0B72F688E8D00C646CC /* Build configuration list for PBXNativeTarget "OpenBeam" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				07C1A0B82F688E8D00C646CC /* Debug */,

@@ -1,4 +1,4 @@
-# CamNDI
+# Open Beam
 
 <p align="center">
 <img width="678" height="419" alt="image" src="https://github.com/user-attachments/assets/0742cb95-6864-40ca-a8ff-3f2164280688" /><br>
@@ -16,7 +16,7 @@ A lightweight native macOS menu bar app that captures a USB webcam and broadcast
 
 - **Zero-dependency** — pure AppKit, no Electron, no browser tech, no OBS required
 - **Menu bar only** — lives in the system tray with a live camera preview
-- **NDI output** — appears as "CamNDI" on the local network, visible to any NDI receiver
+- **NDI output** — advertises your machine name as the NDI source, visible to any NDI receiver on the local network
 - **Camera selection** — switch between built-in and external USB cameras
 - **macOS Camera Effects** — works with Apple's built-in portrait mode, background replacement, and reactions (via the green camera button)
 - **Live statistics** — resolution, capture/NDI FPS, data rate, frame counts
@@ -24,7 +24,7 @@ A lightweight native macOS menu bar app that captures a USB webcam and broadcast
 
 ## Install
 
-Download `CamNDI.dmg` from [Releases](https://github.com/manuelvegadev/CamNDI/releases), open it, and drag CamNDI to Applications.
+Download `OpenBeam.dmg` from [Releases](https://github.com/manuelvegadev/OpenBeam/releases), open it, and drag Open Beam to Applications.
 
 > No NDI SDK installation needed — `libndi.dylib` is bundled inside the app.
 
@@ -43,8 +43,8 @@ Building requires the [NDI SDK for Apple](https://ndi.video/for-developers/ndi-s
 2. **Clone the repo**
 
    ```bash
-   git clone https://github.com/manuelvegadev/CamNDI.git
-   cd CamNDI
+   git clone https://github.com/manuelvegadev/OpenBeam.git
+   cd OpenBeam
    ```
 
 3. **Copy NDI SDK files into the project**
@@ -57,7 +57,7 @@ Building requires the [NDI SDK for Apple](https://ndi.video/for-developers/ndi-s
 4. **Open and build**
 
    ```bash
-   open CamNDI.xcodeproj
+   open OpenBeam.xcodeproj
    ```
 
    Build and run (⌘R). The app appears as a camera icon in the menu bar.
@@ -65,7 +65,7 @@ Building requires the [NDI SDK for Apple](https://ndi.video/for-developers/ndi-s
 ## Architecture
 
 ```
-CamNDI/
+OpenBeam/
 ├── AppDelegate.swift        # Menu bar UI, pipeline wiring, stats
 ├── CameraController.swift   # AVCaptureSession, camera switching
 ├── NDISender.swift           # NDI C API bridge, async frame sending
@@ -93,13 +93,13 @@ To create a distributable `.dmg` installer:
 ./scripts/build-dmg.sh
 ```
 
-This builds a Release configuration, embeds `libndi.dylib` inside the app bundle, and creates `build/CamNDI.dmg`. Users just drag CamNDI.app to Applications.
+This builds a Release configuration, embeds `libndi.dylib` inside the app bundle, and creates `build/OpenBeam.dmg`. Users just drag OpenBeam.app to Applications.
 
 > **Note:** For distribution to others, you should sign with a Developer ID certificate and notarize with Apple. See [Apple's documentation on notarization](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution).
 
 ## Credits
 
-- [NDI](https://ndi.video/) — Network Device Interface SDK by Vizrt. CamNDI uses the NDI SDK to broadcast video over the local network.
+- [NDI](https://ndi.video/) — Network Device Interface SDK by Vizrt. Open Beam uses the NDI SDK to broadcast video over the local network.
 - [Phosphor Icons](https://phosphoricons.com/) — app icon and menu bar icon use the Phosphor webcam glyph.
 
 ## License

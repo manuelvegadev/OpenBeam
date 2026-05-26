@@ -86,7 +86,7 @@ final class NetTrafficMonitor: @unchecked Sendable {
     }
 
     /// nettop emits a CSV header (`,bytes_out,`) then one data line per sample
-    /// looking like `CamNDI.<pid>,<cumulative bytes_out>,`. We compute the
+    /// looking like `OpenBeam.<pid>,<cumulative bytes_out>,`. We compute the
     /// delta between consecutive samples; each sample is ~1s.
     private func handle(line: String) {
         let cols = line.split(separator: ",", omittingEmptySubsequences: true)
