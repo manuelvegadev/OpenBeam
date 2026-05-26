@@ -77,10 +77,17 @@ final class NDISender: @unchecked Sendable {
             let stride = Int32(CVPixelBufferGetBytesPerRow(pixelBuffer))
             let height = Int32(CVPixelBufferGetHeight(pixelBuffer))
 
+            let fourCC: NDIlib_FourCC_video_type_e
+            switch CVPixelBufferGetPixelFormatType(pixelBuffer) {
+            case kCVPixelFormatType_32BGRA:        fourCC = NDIlib_FourCC_type_BGRA
+            case kCVPixelFormatType_422YpCbCr8:    fourCC = NDIlib_FourCC_type_UYVY
+            default:                               return
+            }
+
             var frame = NDIlib_video_frame_v2_t()
             frame.xres = Int32(CVPixelBufferGetWidth(pixelBuffer))
             frame.yres = height
-            frame.FourCC = NDIlib_FourCC_type_BGRA
+            frame.FourCC = fourCC
             frame.frame_rate_N = 30000
             frame.frame_rate_D = 1001
             frame.picture_aspect_ratio = 0

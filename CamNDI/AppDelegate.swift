@@ -46,6 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statsDataRateItem: NSMenuItem!
     private var statsFramesSentItem: NSMenuItem!
     private var statsDroppedItem: NSMenuItem!
+    private var pixelFormatToggleItem: NSMenuItem!
     private var prevFramesSent: Int64 = 0
     private var prevBytesSent: Int64 = 0
     private var prevStatsTime: CFAbsoluteTime = 0
@@ -217,6 +218,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         restartNDI.target = self
         menu.addItem(restartNDI)
 
+        pixelFormatToggleItem = NSMenuItem(title: "Send as UYVY (4:2:2)",
+                                           action: #selector(togglePixelFormat(_:)),
+                                           keyEquivalent: "")
+        pixelFormatToggleItem.target = self
+        pixelFormatToggleItem.state = (cameraController.pixelFormat == .uyvy422) ? .on : .off
+        menu.addItem(pixelFormatToggleItem)
+
         menu.addItem(.separator())
 
         // --- Statistics (collapsible via submenu) ---
@@ -299,28 +307,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Preview Helper
 
     private static let sRGBColorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
+    private static let previewCIContext = CIContext(options: nil)
 
     private static func createCGImage(from pixelBuffer: CVPixelBuffer) -> CGImage? {
-        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
-        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
+        // BGRA: zero-copy path through CGContext on the locked base address.
+        if CVPixelBufferGetPixelFormatType(pixelBuffer) == kCVPixelFormatType_32BGRA {
+            CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+            defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
 
-        guard let base = CVPixelBufferGetBaseAddress(pixelBuffer) else { return nil }
+            guard let base = CVPixelBufferGetBaseAddress(pixelBuffer) else { return nil }
+            let w = CVPixelBufferGetWidth(pixelBuffer)
+            let h = CVPixelBufferGetHeight(pixelBuffer)
+            let stride = CVPixelBufferGetBytesPerRow(pixelBuffer)
 
-        let w = CVPixelBufferGetWidth(pixelBuffer)
-        let h = CVPixelBufferGetHeight(pixelBuffer)
-        let stride = CVPixelBufferGetBytesPerRow(pixelBuffer)
+            guard let ctx = CGContext(data: base,
+                                      width: w,
+                                      height: h,
+                                      bitsPerComponent: 8,
+                                      bytesPerRow: stride,
+                                      space: sRGBColorSpace,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue |
+                                                  CGBitmapInfo.byteOrder32Little.rawValue)
+            else { return nil }
+            return ctx.makeImage()
+        }
 
-        guard let ctx = CGContext(data: base,
-                                  width: w,
-                                  height: h,
-                                  bitsPerComponent: 8,
-                                  bytesPerRow: stride,
-                                  space: sRGBColorSpace,
-                                  bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue |
-                                              CGBitmapInfo.byteOrder32Little.rawValue)
-        else { return nil }
-
-        return ctx.makeImage()
+        // Non-BGRA (e.g. UYVY): let Core Image handle the YUV→RGB conversion.
+        let ci = CIImage(cvPixelBuffer: pixelBuffer)
+        return previewCIContext.createCGImage(ci, from: ci.extent)
     }
 
     // MARK: - Stats Timer
@@ -437,6 +451,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ = ndiSender.restart()
     }
 
+    @objc private func togglePixelFormat(_ sender: NSMenuItem) {
+        let new: CameraPixelFormat = (cameraController.pixelFormat == .uyvy422) ? .bgra32 : .uyvy422
+        cameraController.setPixelFormat(new)
+        sender.state = (new == .uyvy422) ? .on : .off
+    }
+
     @objc private func selectCamera(_ sender: NSMenuItem) {
         guard let deviceID = sender.representedObject as? String else { return }
         cameraController.switchCamera(deviceID: deviceID)
@@ -482,6 +502,7 @@ extension AppDelegate: NSMenuDelegate {
         if menu === statusItem.menu {
             menuIsOpen = true
             startLevelTimer()
+            pixelFormatToggleItem.state = (cameraController.pixelFormat == .uyvy422) ? .on : .off
         }
     }
 

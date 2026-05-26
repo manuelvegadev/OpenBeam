@@ -7,7 +7,24 @@
 
 import AVFoundation
 
+/// Pixel format the capture output emits and NDI sends. UYVY is 4:2:2 packed
+/// (2 B/px) and roughly halves the bytes we hand to libndi vs BGRA (4 B/px),
+/// which also lets SpeedHQ compress more efficiently on the wire.
+enum CameraPixelFormat: String {
+    case bgra32
+    case uyvy422
+
+    var cvType: OSType {
+        switch self {
+        case .bgra32:  return kCVPixelFormatType_32BGRA
+        case .uyvy422: return kCVPixelFormatType_422YpCbCr8
+        }
+    }
+}
+
 final class CameraController: NSObject, @unchecked Sendable {
+
+    private static let pixelFormatDefaultsKey = "OpenBeam.cameraPixelFormat"
 
     private let session = AVCaptureSession()
     private let outputQueue = DispatchQueue(label: "com.openbeam.capture", qos: .userInteractive)
@@ -16,12 +33,38 @@ final class CameraController: NSObject, @unchecked Sendable {
 
     var onFrame: ((CVPixelBuffer) -> Void)?
 
+    private(set) var pixelFormat: CameraPixelFormat
+
+    override init() {
+        let raw = UserDefaults.standard.string(forKey: Self.pixelFormatDefaultsKey)
+        self.pixelFormat = raw.flatMap(CameraPixelFormat.init(rawValue:)) ?? .bgra32
+        super.init()
+    }
+
     static var availableCameras: [AVCaptureDevice] {
         AVCaptureDevice.DiscoverySession(
             deviceTypes: [.builtInWideAngleCamera, .external],
             mediaType: .video,
             position: .unspecified
         ).devices
+    }
+
+    /// Switch the emitted pixel format at runtime. Persists the choice and
+    /// hot-reloads the running output's videoSettings without tearing down
+    /// the session.
+    func setPixelFormat(_ new: CameraPixelFormat) {
+        guard new != pixelFormat else { return }
+        pixelFormat = new
+        UserDefaults.standard.set(new.rawValue, forKey: Self.pixelFormatDefaultsKey)
+
+        session.beginConfiguration()
+        if let output = session.outputs.first as? AVCaptureVideoDataOutput {
+            output.videoSettings = [
+                kCVPixelBufferPixelFormatTypeKey as String: new.cvType
+            ]
+        }
+        session.commitConfiguration()
+        print("[Open Beam] Camera pixel format: \(new.rawValue)")
     }
 
     func start(deviceID: String? = nil) {
@@ -63,7 +106,7 @@ final class CameraController: NSObject, @unchecked Sendable {
         if session.outputs.isEmpty {
             let output = AVCaptureVideoDataOutput()
             output.videoSettings = [
-                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+                kCVPixelBufferPixelFormatTypeKey as String: pixelFormat.cvType
             ]
             output.alwaysDiscardsLateVideoFrames = true
             output.setSampleBufferDelegate(self, queue: outputQueue)
