@@ -35,5 +35,28 @@
 	</array>
 	<key>NSHumanReadableCopyright</key>
 	<string></string>
+	<!--
+	  Silence the per-frame `createFromPixelbuffer: …Key not found. Using R709`
+	  spam emitted by macOS's Portrait framework when a system video effect
+	  (Center Stage / Studio Light / Portrait / Reactions) is active on a UVC
+	  camera that delivers untagged YUV frames. Scoped to com.apple.portrait
+	  so our logs and other frameworks' messages stay visible.
+	-->
+	<key>OSLogPreferences</key>
+	<dict>
+		<key>com.apple.portrait</key>
+		<dict>
+			<key>DEFAULT-OPTIONS</key>
+			<dict>
+				<key>Level</key>
+				<dict>
+					<key>Enable</key>
+					<string>Off</string>
+					<key>Persist</key>
+					<string>Off</string>
+				</dict>
+			</dict>
+		</dict>
+	</dict>
 </dict>
 </plist>
