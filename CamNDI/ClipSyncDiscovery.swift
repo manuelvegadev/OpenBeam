@@ -5,17 +5,20 @@
 //  mDNS advertise + browse for ClipSync v1 (`_clipsync._tcp`). Filters out our
 //  own peerID and dedupes peers across multiple network interfaces.
 //
+//  TCP listening uses NWListener; mDNS publish + browse goes through the
+//  legacy `dns_sd.h` API (see ClipSyncBonjour.swift) to bypass macOS 15+'s
+//  NWListener.publish gating that hits ad-hoc-signed dev builds with NoAuth.
+//
 
 import Foundation
 import Network
 import os
 
+private let log = Logger(subsystem: "com.openbeam.clipsync", category: "discovery")
+
 final class ClipSyncDiscovery: @unchecked Sendable {
 
-    // Pulled-set of peers currently visible on the LAN.
     var onPeersChanged: (([DiscoveredPeer]) -> Void)?
-
-    /// Endpoint of an incoming connection — the manager attaches a Connection wrapper.
     var onIncomingConnection: ((NWConnection) -> Void)?
 
     private let queue = DispatchQueue(label: "com.openbeam.clipsync.io", qos: .utility)
@@ -24,14 +27,16 @@ final class ClipSyncDiscovery: @unchecked Sendable {
     private struct State {
         var peers: [String: DiscoveredPeer] = [:]    // keyed by peerID
         var listener: NWListener?
-        var browser: NWBrowser?
         var advertisedPort: UInt16 = 0
     }
 
     private let identity: ClipSyncIdentity
+    private let publisher = BonjourPublisher()
+    private let browser: BonjourBrowser
 
     init(identity: ClipSyncIdentity) {
         self.identity = identity
+        self.browser = BonjourBrowser(queue: queue)
     }
 
     var listenPort: UInt16 {
@@ -43,50 +48,49 @@ final class ClipSyncDiscovery: @unchecked Sendable {
     }
 
     func stop() {
-        let (l, b) = lock.withLock { (s: inout State) in
-            let l = s.listener; let b = s.browser
-            s.listener = nil; s.browser = nil; s.peers.removeAll()
-            return (l, b)
+        let l: NWListener? = lock.withLock { (s: inout State) in
+            let l = s.listener
+            s.listener = nil
+            s.peers.removeAll()
+            return l
         }
         l?.cancel()
-        b?.cancel()
+        publisher.stop()
+        browser.stop()
         onPeersChanged?([])
     }
 
-    // MARK: - Listener (advertises _clipsync._tcp)
+    // MARK: - TCP listener (no Bonjour service attached)
 
     private func startListener() {
-        let txt: NWTXTRecord = makeTXTRecord()
-        let service = NWListener.Service(name: identity.peerID,
-                                         type: ClipSync.serviceType,
-                                         domain: nil,
-                                         txtRecord: txt)
-
         let params = NWParameters.tcp
-        params.includePeerToPeer = true
 
         let listener: NWListener
         do {
             listener = try NWListener(using: params)
         } catch {
-            print("[Open Beam] ClipSync listener init failed: \(error)")
+            log.error("listener init failed: \(String(describing: error), privacy: .public)")
             return
         }
-        listener.service = service
 
         listener.stateUpdateHandler = { [weak self] state in
             switch state {
+            case .setup:
+                log.info("listener: setup")
+            case .waiting(let err):
+                log.error("listener: waiting (transient): \(String(describing: err), privacy: .public)")
             case .ready:
                 if let p = listener.port?.rawValue {
                     self?.lock.withLock { $0.advertisedPort = p }
-                    print("[Open Beam] ClipSync listening on TCP \(p), advertising \(ClipSync.serviceType) as \(self?.identity.peerID ?? "?")")
-                    self?.startBrowser()
+                    log.info("listener: ready on TCP \(p, privacy: .public)")
+                    self?.advertise(port: p)
+                    self?.startBrowse()
                 }
             case .failed(let err):
-                print("[Open Beam] ClipSync listener failed: \(err)")
+                log.error("listener: failed: \(String(describing: err), privacy: .public)")
             case .cancelled:
-                break
-            default:
+                log.info("listener: cancelled")
+            @unknown default:
                 break
             }
         }
@@ -99,50 +103,50 @@ final class ClipSyncDiscovery: @unchecked Sendable {
         listener.start(queue: queue)
     }
 
-    private func makeTXTRecord() -> NWTXTRecord {
-        var txt = NWTXTRecord()
-        txt["id"] = identity.peerID
-        txt["name"] = identity.displayName
-        txt["os"] = ClipSync.osIdentifier
-        txt["v"] = String(ClipSync.protocolVersion)
-        return txt
+    // MARK: - mDNS publish (via dns_sd.h)
+
+    private func advertise(port: UInt16) {
+        let txt: [String: String] = [
+            "id":   identity.peerID,
+            "name": identity.displayName,
+            "os":   ClipSync.osIdentifier,
+            "v":    String(ClipSync.protocolVersion),
+        ]
+        publisher.start(
+            name: identity.peerID,
+            type: ClipSync.serviceType,
+            port: port,
+            txt: txt,
+            queue: queue
+        )
     }
 
-    // MARK: - Browser
+    // MARK: - mDNS browse (via dns_sd.h)
 
-    private func startBrowser() {
-        let descriptor = NWBrowser.Descriptor.bonjourWithTXTRecord(type: ClipSync.serviceType, domain: nil)
-        let params = NWParameters()
-        params.includePeerToPeer = true
-
-        let browser = NWBrowser(for: descriptor, using: params)
-        browser.stateUpdateHandler = { state in
-            if case .failed(let err) = state {
-                print("[Open Beam] ClipSync browser failed: \(err)")
-            }
-        }
-        browser.browseResultsChangedHandler = { [weak self] results, _ in
+    private func startBrowse() {
+        browser.onChange = { [weak self] results in
             self?.handle(results: results)
         }
-
-        lock.withLock { $0.browser = browser }
-        browser.start(queue: queue)
+        browser.start(type: ClipSync.serviceType)
     }
 
-    private func handle(results: Set<NWBrowser.Result>) {
+    private func handle(results: Set<BonjourBrowser.Result>) {
         var collected: [String: DiscoveredPeer] = [:]
 
         for r in results {
-            guard case let .bonjour(txt) = r.metadata else { continue }
-            guard let id = txt["id"], id != identity.peerID else { continue }    // skip self
+            // Service instance name == peerID (we set it that way).
+            let id = r.txt["id"] ?? r.name
+            guard id != identity.peerID else { continue }    // skip self
 
-            let name = txt["name"] ?? id
-            let os = txt["os"] ?? "unknown"
-            let v = Int(txt["v"] ?? "1") ?? 1
+            let name = r.txt["name"] ?? id
+            let os = r.txt["os"] ?? "unknown"
+            let v = Int(r.txt["v"] ?? "1") ?? 1
 
-            let endpoint = r.endpoint
+            let endpoint = NWEndpoint.hostPort(
+                host: NWEndpoint.Host(r.host),
+                port: NWEndpoint.Port(rawValue: r.port) ?? .any
+            )
 
-            // Dedupe by peerID; if already present, prefer Bonjour endpoint over ip-port.
             if collected[id] == nil {
                 collected[id] = DiscoveredPeer(
                     peerID: id,
@@ -162,12 +166,13 @@ final class ClipSyncDiscovery: @unchecked Sendable {
         }
 
         if prev.keys != nextPeers.keys || prev != nextPeers {
+            log.info("peers changed: \(nextPeers.count, privacy: .public) visible")
             let list = Array(nextPeers.values).sorted { $0.displayName < $1.displayName }
             onPeersChanged?(list)
         }
     }
 
-    /// Resolve a `DiscoveredPeer` back to an `NWEndpoint` suitable for `NWConnection`.
+    /// Resolve a `DiscoveredPeer` back to an `NWEndpoint` for `NWConnection`.
     static func endpoint(of peer: DiscoveredPeer) -> NWEndpoint? {
         peer.endpoint.underlying as? NWEndpoint
     }

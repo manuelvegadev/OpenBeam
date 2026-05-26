@@ -199,14 +199,25 @@ final class ClipSyncIdentity: @unchecked Sendable {
 
     // MARK: - Keychain wrappers
 
-    private static func keychainLoad() -> Data? {
-        let q: [String: Any] = [
-            kSecClass as String:           kSecClassGenericPassword,
-            kSecAttrService as String:     keychainTag,
-            kSecAttrAccount as String:     "identity",
-            kSecReturnData as String:      true,
-            kSecMatchLimit as String:      kSecMatchLimitOne,
+    // The "data-protection" keychain (kSecUseDataProtectionKeychain) is the
+    // modern variant — bundle-id-based ACLs, no interactive prompts on read,
+    // and shared cleanly across code-signature changes for the same bundle.
+    // The legacy file-based keychain (default) prompts the user on read when
+    // the calling process's code signature is unfamiliar, which deadlocks our
+    // start() chain on rebuilt dev binaries.
+    private static func baseKeychainQuery() -> [String: Any] {
+        [
+            kSecClass as String:                      kSecClassGenericPassword,
+            kSecAttrService as String:                keychainTag,
+            kSecAttrAccount as String:                "identity",
+            kSecUseDataProtectionKeychain as String:  true,
         ]
+    }
+
+    private static func keychainLoad() -> Data? {
+        var q = baseKeychainQuery()
+        q[kSecReturnData as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
         var out: AnyObject?
         let status = SecItemCopyMatching(q as CFDictionary, &out)
         if status == errSecSuccess { return out as? Data }
@@ -217,18 +228,13 @@ final class ClipSyncIdentity: @unchecked Sendable {
     }
 
     private static func keychainSave(_ data: Data) {
-        let baseQuery: [String: Any] = [
-            kSecClass as String:           kSecClassGenericPassword,
-            kSecAttrService as String:     keychainTag,
-            kSecAttrAccount as String:     "identity",
-        ]
-        // Try update first; if not present, add.
+        let base = baseKeychainQuery()
         let update: [String: Any] = [kSecValueData as String: data]
-        var status = SecItemUpdate(baseQuery as CFDictionary, update as CFDictionary)
+        var status = SecItemUpdate(base as CFDictionary, update as CFDictionary)
         if status == errSecItemNotFound {
-            var add = baseQuery
+            var add = base
             add[kSecValueData as String] = data
-            add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+            add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
             status = SecItemAdd(add as CFDictionary, nil)
         }
         if status != errSecSuccess {

@@ -89,11 +89,13 @@ After TCP connect, both sides immediately send **one cleartext `hello` frame eac
 `sig` is computed as:
 
 ```
-domain = b"clipsync-v1\x00hello\x00"
+domain = b"clipsync-v1\x00hello\x00"             // 18 bytes, with two embedded NUL bytes
 peer_sig_pub_expected = the peer's sigPub if known from a prior pairing, else 32 zero bytes
-msg = domain || ephPub || peer_sig_pub_expected
-sig = Ed25519.sign(sigPriv, msg)
+msg = domain || ephPub || peer_sig_pub_expected   // total length = 18 + 32 + 32 = 82 bytes
+sig = Ed25519.sign(sigPriv, msg)                  // 64-byte detached signature
 ```
+
+**Important:** `ephPub` and `peer_sig_pub_expected` here are the **raw 32-byte** representations of the public keys, *not* their base64-encoded JSON wire form. The signed message is exactly 82 raw bytes. Then the resulting 64-byte `sig` is base64-encoded only when placed into the JSON `sig` field. Do not sign the base64 strings — sign the raw bytes.
 
 The initiator uses 32 zero bytes for `peer_sig_pub_expected` on every `hello` (the initiator may not know who they're connecting to — Bonjour names can change). The responder, having received the initiator's `hello` first, uses the initiator's actual `sigPub` for its own `hello`'s signature. (The initiator validates the responder's `hello` only after it knows what `sigPub` to expect — for paired peers, that's the pinned value; for unpaired peers, see "Pairing".)
 

@@ -13,6 +13,12 @@ import Network
 import CryptoKit
 import os
 
+private let connLog = Logger(subsystem: "com.openbeam.clipsync", category: "connection")
+
+private extension Data {
+    var hex: String { map { String(format: "%02x", $0) }.joined() }
+}
+
 protocol ClipSyncConnectionDelegate: AnyObject {
     /// Handshake completed. Includes whether the peer is currently paired and
     /// the verification artifacts available during this handshake (used by the
@@ -271,8 +277,17 @@ final class ClipSyncConnection: @unchecked Sendable {
 
         let peerSigKey = try Curve25519.Signing.PublicKey(rawRepresentation: peerHello.sigPub)
         guard peerSigKey.isValidSignature(peerHello.sig, for: signedMsg) else {
+            connLog.error("hello sig verify FAILED, role=\(self.role == .responder ? "responder" : "initiator", privacy: .public)")
+            connLog.error("  expected_signed_msg(hex)=\(signedMsg.hex, privacy: .public)")
+            connLog.error("  expected_signed_msg_len=\(signedMsg.count, privacy: .public)")
+            connLog.error("  peer_ephPub(hex)=\(peerHello.ephPub.hex, privacy: .public)")
+            connLog.error("  peer_sigPub(hex)=\(peerHello.sigPub.hex, privacy: .public)")
+            connLog.error("  peer_expected_our_sigPub(hex)=\(peerExpectedOurSigPub.hex, privacy: .public)")
+            connLog.error("  signature(hex)=\(peerHello.sig.hex, privacy: .public)")
+            connLog.error("  domain(hex)=\(ClipSync.helloDomain.hex, privacy: .public)")
             throw ClipSyncError.signatureInvalid
         }
+        connLog.info("hello sig verified for peer=\(peerHello.peerID, privacy: .public)")
 
         // If peer is in our pinned list, the sigPub must match the pinned value.
         let isPaired: Bool

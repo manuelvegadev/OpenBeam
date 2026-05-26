@@ -12,6 +12,8 @@ import CryptoKit
 import Foundation
 import os
 
+private let log = Logger(subsystem: "com.openbeam.clipsync", category: "clipboard")
+
 /// Snapshot of the pasteboard at one tick, classified into the highest-priority
 /// content type present (file URLs > text).
 enum PasteboardSnapshot {
@@ -130,31 +132,50 @@ final class ClipboardPlugin: @unchecked Sendable {
 
     /// Inbound payload from a connection. Called on the io queue.
     func handleInbound(payloadData: Data) {
-        guard let payload = try? ClipSyncJSON.decoder.decode(ClipboardTextPayload.self, from: payloadData) else { return }
-        guard payload.kind == "clipboard.text" || payload.kind == "clipboard.text.snapshot" else { return }
-        guard payload.originID != identity.peerID else { return }    // own-loop guard
-        let body = payload.body
-        let utf8 = Data(body.utf8)
-        guard utf8.count <= ClipSync.maxTextBytes else { return }
-
-        let hash = Self.hashHex(utf8)
-        let alreadyApplied: Bool = lock.withLock { s in
-            if s.lastAppliedHash == hash || s.lastBroadcastHash == hash { return true }
-            return false
-        }
-        if alreadyApplied { return }
-
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            let pb = NSPasteboard.general
-            pb.clearContents()
-            pb.setString(body, forType: .string)
-            let cc = pb.changeCount
-            self.lock.withLock {
-                $0.lastAppliedHash = hash
-                $0.lastWriteChangeCount = cc
+        do {
+            let payload = try ClipSyncJSON.decoder.decode(ClipboardTextPayload.self, from: payloadData)
+            guard payload.kind == "clipboard.text" || payload.kind == "clipboard.text.snapshot" else {
+                log.error("inbound text: unexpected kind=\(payload.kind, privacy: .public)")
+                return
             }
-            self.watcher.ackOwnWrite(changeCount: cc)
+            guard payload.originID != identity.peerID else {
+                log.info("inbound text: dropping own-origin payload")
+                return
+            }
+            let body = payload.body
+            let utf8 = Data(body.utf8)
+            guard utf8.count <= ClipSync.maxTextBytes else {
+                log.error("inbound text: payload size \(utf8.count, privacy: .public) exceeds cap")
+                return
+            }
+
+            let hash = Self.hashHex(utf8)
+            let alreadyApplied: Bool = lock.withLock { s in
+                if s.lastAppliedHash == hash || s.lastBroadcastHash == hash { return true }
+                return false
+            }
+            if alreadyApplied {
+                log.info("inbound text: skipping (already applied or just broadcast); hash=\(hash.prefix(12), privacy: .public)")
+                return
+            }
+
+            log.info("inbound text: applying \(utf8.count, privacy: .public) bytes from \(payload.originID.prefix(8), privacy: .public) (kind=\(payload.kind, privacy: .public))")
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                let pb = NSPasteboard.general
+                pb.clearContents()
+                let ok = pb.setString(body, forType: .string)
+                let cc = pb.changeCount
+                self.lock.withLock {
+                    $0.lastAppliedHash = hash
+                    $0.lastWriteChangeCount = cc
+                }
+                self.watcher.ackOwnWrite(changeCount: cc)
+                log.info("inbound text: pasteboard write \(ok ? "OK" : "FAILED", privacy: .public), changeCount=\(cc, privacy: .public)")
+            }
+        } catch {
+            log.error("inbound text: decode failed: \(String(describing: error), privacy: .public)")
         }
     }
 
@@ -163,11 +184,13 @@ final class ClipboardPlugin: @unchecked Sendable {
     private func handle(snapshot: PasteboardSnapshot, changeCount: Int) {
         switch snapshot {
         case .text(let s):
+            print("[Open Beam] ClipSync: pasteboard text change cc=\(changeCount)")
             broadcastText(s)
         case .fileURLs(let urls):
+            print("[Open Beam] ClipSync: pasteboard files change cc=\(changeCount) count=\(urls.count)")
             onFileURLs?(urls, changeCount)
         case .empty:
-            break
+            print("[Open Beam] ClipSync: pasteboard change cc=\(changeCount) (empty/unsupported type)")
         }
     }
 
@@ -185,8 +208,12 @@ final class ClipboardPlugin: @unchecked Sendable {
             s.lastBroadcastHash = hash
             return true
         }
-        guard shouldSend else { return }
+        guard shouldSend else {
+            print("[Open Beam] ClipSync: text dedup skip (hash matches recent broadcast/apply)")
+            return
+        }
         guard let payload = makeTextPayload(s, kind: "clipboard.text") else { return }
+        print("[Open Beam] ClipSync: broadcasting text \(utf8.count) B, hasBroadcaster=\(broadcast != nil)")
         broadcast?(payload)
     }
 

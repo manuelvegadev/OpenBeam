@@ -11,6 +11,8 @@ import Foundation
 import Network
 import os
 
+private let mgrLog = Logger(subsystem: "com.openbeam.clipsync", category: "manager")
+
 final class ClipSyncManager: NSObject, @unchecked Sendable {
 
     // MARK: - Dependencies
@@ -279,14 +281,17 @@ extension ClipSyncManager: ClipSyncConnectionDelegate {
     }
 
     func connection(_ c: ClipSyncConnection, didReceivePayload data: Data) {
-        guard let kind = ClipSyncJSON.peekKind(data) else { return }
+        guard let kind = ClipSyncJSON.peekKind(data) else {
+            mgrLog.error("recv: payload missing/unknown 'kind'; \(data.count, privacy: .public) bytes")
+            return
+        }
+        mgrLog.info("recv: kind=\(kind, privacy: .public), \(data.count, privacy: .public) bytes from peer=\(c.peerID ?? "?", privacy: .public)")
         switch kind {
         case "clipboard.text", "clipboard.text.snapshot":
             clipboard.handleInbound(payloadData: data)
         case "share.begin", "share.chunk", "share.end", "share.cancel":
             share.handleInbound(payloadData: data, kind: kind)
         case "ping":
-            // Echo as pong.
             if let ping = try? ClipSyncJSON.decoder.decode(PingPayload.self, from: data) {
                 let pong = PingPayload(kind: "pong", nonce: ping.nonce)
                 if let d = try? ClipSyncJSON.encoder.encode(pong) {
@@ -296,7 +301,7 @@ extension ClipSyncManager: ClipSyncConnectionDelegate {
         case "pong":
             break
         default:
-            break    // forward-compat: ignore unknown kinds
+            mgrLog.info("recv: ignoring unknown kind=\(kind, privacy: .public)")
         }
     }
 
