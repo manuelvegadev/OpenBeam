@@ -12,7 +12,16 @@ import os
 
 final class NDISender: @unchecked Sendable {
 
-    static let sourceName = "Open Beam"
+    static let sourceName: String = {
+        if let localized = Host.current().localizedName, !localized.isEmpty {
+            return localized
+        }
+        let hostName = ProcessInfo.processInfo.hostName
+        if !hostName.isEmpty {
+            return hostName.hasSuffix(".local") ? String(hostName.dropLast(6)) : hostName
+        }
+        return "Open Beam"
+    }()
 
     private var ndiInstance: NDIlib_send_instance_t?
     private let queue = DispatchQueue(label: "com.openbeam.ndi-send", qos: .userInteractive)
