@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let audioController = AudioController()
     private let ndiSender = NDISender()
     private let clipSyncManager = ClipSyncManager()
+    private let netMonitor = NetTrafficMonitor()
 
     private var cameraSubmenu: NSMenu!
     private var audioSubmenu: NSMenu!
@@ -72,6 +73,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         buildStatusItem()
         startPipeline()
         startStatsTimer()
+        netMonitor.start()
         clipSyncManager.onStateChanged = { [weak self] in
             // No persistent submenu items to mutate eagerly; the menu rebuilds on open.
             _ = self
@@ -89,6 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         audioController.stop()
         ndiSender.stop()
         clipSyncManager.stop()
+        netMonitor.stop()
     }
 
     // MARK: - Status Bar Menu
@@ -374,7 +377,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         statsResolutionItem.title = "\(frameStats.width)×\(frameStats.height)"
         statsFPSItem.title = "Capture \(String(format: "%.1f", captureFPS)) fps → NDI \(String(format: "%.1f", ndiSentFPS)) fps"
-        statsDataRateItem.title = "\(String(format: "%.1f", dataRateMBps)) MB/s"
+        let wireMBps = netMonitor.bytesPerSecondOut / (1024.0 * 1024.0)
+        statsDataRateItem.title = String(format: "Capture %.1f MB/s | Wire %.2f MB/s",
+                                         dataRateMBps, wireMBps)
         statsFramesSentItem.title = "Sent: \(formatCount(sent))"
         statsDroppedItem.title = "Dropped: \(formatCount(ndiSender.droppedFrames))"
     }
