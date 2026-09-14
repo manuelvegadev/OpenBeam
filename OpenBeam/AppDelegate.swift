@@ -7,6 +7,7 @@
 
 import AppKit
 import AVFoundation
+import CoreImage
 import os
 
 @main
@@ -17,6 +18,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var previewLayer: CALayer!
     private var menuIsOpen = false
+    /// The preview is emptied on close, so the next frame fades back in.
+    private enum PreviewIntro { case pending, running, done }
+    private var previewIntro: PreviewIntro = .pending
 
     private let cameraController = CameraController()
     private let audioController = AudioController()
@@ -72,7 +76,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildStatusItem()
         startPipeline()
-        startStatsTimer()
         clipSyncManager.onStateChanged = { [weak self] in
             // No persistent submenu items to mutate eagerly; the menu rebuilds on open.
             _ = self
@@ -84,8 +87,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        statsTimer?.invalidate()
-        levelTimer?.invalidate()
+        stopStatsTimer()
+        stopLevelTimer()
         cameraController.stop()
         audioController.stop()
         ndiSender.stop()
@@ -144,7 +147,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         previewLayer = CALayer()
         previewLayer.frame = CGRect(x: 8, y: 8, width: 320, height: 180)
-        previewLayer.backgroundColor = NSColor.black.cgColor
+        // No background: an empty preview shows the menu's own vibrant
+        // material through it rather than a black slab.
+        previewLayer.backgroundColor = nil
         previewLayer.cornerRadius = 6
         previewLayer.masksToBounds = true
         previewLayer.contentsGravity = .resizeAspect
@@ -278,10 +283,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             self.ndiSender.send(pixelBuffer: pixelBuffer)
 
-            // Only render preview when the menu is visible
-            guard self.menuIsOpen else { return }
+            // Render the preview only while the menu is visible, and not while
+            // the intro animation owns the layer — building the image first and
+            // discarding it on the main thread wasted a full-resolution copy per
+            // frame for the whole intro.
+            guard self.menuIsOpen, self.previewIntro != .running else { return }
 
             guard let cgImage = Self.createCGImage(from: pixelBuffer) else { return }
+
+            if self.previewIntro == .pending {
+                // Built here rather than on the main thread: the menu is opening
+                // and its own animation is running there. A second frame can
+                // reach this before the state flips, which only costs one extra
+                // ladder — the main thread keeps whichever arrives first.
+                let ladder = Self.previewIntroLadder(from: cgImage)
+                DispatchQueue.main.async {
+                    guard self.previewIntro == .pending else { return }
+                    self.previewIntro = .running
+                    self.runPreviewIntro(ladder: ladder)
+                }
+                return
+            }
 
             DispatchQueue.main.async {
                 self.previewLayer?.contents = cgImage
@@ -342,15 +364,109 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Stats Timer
 
     private func startStatsTimer() {
+        guard statsTimer == nil else { return }
+        // Seed from the live counters: capture keeps running while the menu is
+        // closed, so zeroing would make the first tick report everything since
+        // launch as if it had happened in one second.
         prevStatsTime = CFAbsoluteTimeGetCurrent()
-        prevFramesSent = 0
-        prevCaptureFrameCount = 0
+        prevFramesSent = ndiSender.framesSent
+        prevBytesSent = ndiSender.bytesSent
+        prevCaptureFrameCount = statsLock.withLock { $0.count }
 
         let timer = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
             self?.updateStats()
         }
         RunLoop.main.add(timer, forMode: .common)
         statsTimer = timer
+    }
+
+    private func stopStatsTimer() {
+        statsTimer?.invalidate()
+        statsTimer = nil
+    }
+
+    /// Rates need two samples, so they show placeholders until the first tick.
+    private func resetStatsDisplay() {
+        renderStats(captureFPS: nil, ndiFPS: nil, captureMBps: nil, wireMBps: nil)
+    }
+
+    /// The single place the stats labels are spelled. A nil rate renders as a
+    /// placeholder, so the reset pass and the timer tick cannot drift apart.
+    private func renderStats(captureFPS: Double?,
+                             ndiFPS: Double?,
+                             captureMBps: Double?,
+                             wireMBps: Double?) {
+        func num(_ value: Double?, _ decimals: Int) -> String {
+            guard let value else { return "—" }
+            return String(format: "%.\(decimals)f", value)
+        }
+        let frameStats = statsLock.withLock { $0 }
+        statsResolutionItem.title = frameStats.width > 0
+            ? "\(frameStats.width)×\(frameStats.height)"
+            : "—"
+        statsFPSItem.title = "Capture \(num(captureFPS, 1)) fps → NDI \(num(ndiFPS, 1)) fps"
+        statsDataRateItem.title = "Capture \(num(captureMBps, 1)) MB/s | Wire \(num(wireMBps, 2)) MB/s"
+        statsFramesSentItem.title = "Sent: \(formatCount(ndiSender.framesSent))"
+        statsDroppedItem.title = "Dropped: \(formatCount(ndiSender.droppedFrames))"
+    }
+
+    /// A ladder of progressively sharper copies of the first frame. Core
+    /// Animation cannot interpolate between two images, so the resolve is
+    /// stepped through discrete frames rather than cross-faded.
+    private static func previewIntroLadder(from frame: CGImage) -> [CGImage] {
+        // Work from a quarter-size bitmap: the preview is 320pt wide, so no
+        // detail is lost, and every rung then blurs 480x270 instead of
+        // re-running the downscale from 1080p. Clamping stops the blur sampling
+        // the transparency beyond the edges, which would darken the border into
+        // a vignette.
+        let scaled = CIImage(cgImage: frame).transformed(by: CGAffineTransform(scaleX: 0.25, y: 0.25))
+        let extent = scaled.extent
+        guard let small = previewCIContext.createCGImage(scaled, from: extent) else { return [frame] }
+        let clamped = CIImage(cgImage: small).clampedToExtent()
+
+        let rungs = 9
+        var ladder = (0..<rungs).compactMap { i -> CGImage? in
+            let radius = 15.0 * pow(1.0 - Double(i) / Double(rungs), 2.0)
+            let rung = clamped.applyingFilter("CIGaussianBlur", parameters: ["inputRadius": radius])
+            return previewCIContext.createCGImage(rung, from: extent)
+        }
+        ladder.append(frame)
+        return ladder
+    }
+
+    /// Brings the preview up from nothing: the layer fades in from fully
+    /// transparent while its content resolves from blurred to sharp. Behind the
+    /// fade, what shows is the menu's own translucent material.
+    private func runPreviewIntro(ladder: [CGImage]) {
+        guard let layer = previewLayer else { return }
+
+        let duration: CFTimeInterval = 0.45
+        let curve = CAMediaTimingFunction(name: .easeOut)
+
+        // Both are plain property animations on the same layer, so they
+        // compose. A CATransition for the content change would not: it renders
+        // through its own compositing path and the opacity animation alongside
+        // it is ignored, which made the frame appear at full opacity at once.
+        let fadeIn = CABasicAnimation(keyPath: "opacity")
+        fadeIn.fromValue = 0.0
+        fadeIn.toValue = 1.0
+        fadeIn.duration = duration
+        fadeIn.timingFunction = curve
+
+        let resolve = CAKeyframeAnimation(keyPath: "contents")
+        resolve.values = ladder
+        resolve.calculationMode = .discrete
+        resolve.duration = duration
+        resolve.timingFunction = curve
+
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { [weak self] in
+            if self?.previewIntro == .running { self?.previewIntro = .done }
+        }
+        layer.contents = ladder.last
+        layer.add(fadeIn, forKey: "previewFade")
+        layer.add(resolve, forKey: "previewResolve")
+        CATransaction.commit()
     }
 
     private func updateStats() {
@@ -374,13 +490,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let dataRateMBps = (Double(bytesInInterval) / elapsed) / (1024.0 * 1024.0)
 
-        statsResolutionItem.title = "\(frameStats.width)×\(frameStats.height)"
-        statsFPSItem.title = "Capture \(String(format: "%.1f", captureFPS)) fps → NDI \(String(format: "%.1f", ndiSentFPS)) fps"
-        let wireMBps = netMonitor.bytesPerSecondOut / (1024.0 * 1024.0)
-        statsDataRateItem.title = String(format: "Capture %.1f MB/s | Wire %.2f MB/s",
-                                         dataRateMBps, wireMBps)
-        statsFramesSentItem.title = "Sent: \(formatCount(sent))"
-        statsDroppedItem.title = "Dropped: \(formatCount(ndiSender.droppedFrames))"
+        renderStats(captureFPS: captureFPS,
+                    ndiFPS: ndiSentFPS,
+                    captureMBps: dataRateMBps,
+                    wireMBps: netMonitor.bytesPerSecondOut / (1024.0 * 1024.0))
     }
 
     // MARK: - Audio Level Meter
@@ -507,6 +620,8 @@ extension AppDelegate: NSMenuDelegate {
             menuIsOpen = true
             startLevelTimer()
             netMonitor.start()
+            resetStatsDisplay()
+            startStatsTimer()
             pixelFormatToggleItem.state = (cameraController.pixelFormat == .uyvy422) ? .on : .off
         }
     }
@@ -516,6 +631,14 @@ extension AppDelegate: NSMenuDelegate {
             menuIsOpen = false
             stopLevelTimer()
             netMonitor.stop()
+            stopStatsTimer()
+            // Release the last frame: it is a full-resolution image that would
+            // otherwise sit in memory for as long as the menu stays closed.
+            // Release the full-resolution frame; it would otherwise be
+            // retained for as long as the menu stays closed.
+            previewLayer?.contents = nil
+            previewLayer?.removeAllAnimations()
+            previewIntro = .pending
         }
     }
 
