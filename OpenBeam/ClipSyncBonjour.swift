@@ -99,9 +99,13 @@ final class BonjourPublisher: @unchecked Sendable {
     }
 
     func stop() {
-        source?.cancel()
-        source = nil
-        if let r = ref {
+        if let src = source {
+            // The cancel handler owns the deallocation; see attachDispatchSource.
+            src.cancel()
+            source = nil
+            ref = nil
+        } else if let r = ref {
+            // No source ever took ownership of the socket.
             DNSServiceRefDeallocate(r)
             ref = nil
         }
@@ -109,9 +113,18 @@ final class BonjourPublisher: @unchecked Sendable {
 
     private func attachDispatchSource(_ ref: DNSServiceRef, queue: DispatchQueue) {
         let fd = DNSServiceRefSockFD(ref)
-        guard fd >= 0 else { return }
+        guard fd >= 0 else {
+            DNSServiceRefDeallocate(ref)
+            self.ref = nil
+            return
+        }
         let src = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
         src.setEventHandler { _ = DNSServiceProcessResult(ref) }
+        // DNSServiceRefDeallocate closes the descriptor this source reads, and
+        // cancel() is asynchronous: freeing the ref alongside cancel() leaves
+        // the source live on a closed — and possibly already reused — fd. The
+        // cancel handler is the one point where the source is provably done.
+        src.setCancelHandler { DNSServiceRefDeallocate(ref) }
         source = src
         src.resume()
     }
@@ -137,8 +150,9 @@ final class BonjourBrowser: @unchecked Sendable {
     private var browseSource: DispatchSourceRead?
     private let queue: DispatchQueue
 
-    /// In-flight resolves keyed by service name. Each holds onto its own ref + source.
-    private var resolves: [String: (DNSServiceRef, DispatchSourceRead)] = [:]
+    /// In-flight resolves keyed by service name. Each source's cancel handler
+    /// owns its DNSServiceRef, so cancelling is all it takes to tear one down.
+    private var resolves: [String: DispatchSourceRead] = [:]
     /// Latest resolved entries keyed by service name.
     private var resolved: [String: Result] = [:]
 
@@ -178,17 +192,26 @@ final class BonjourBrowser: @unchecked Sendable {
         if fd >= 0 {
             let src = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
             src.setEventHandler { _ = DNSServiceProcessResult(ref) }
+            src.setCancelHandler { DNSServiceRefDeallocate(ref) }
             browseSource = src
             src.resume()
+        } else {
+            DNSServiceRefDeallocate(ref)
+            browseRef = nil
         }
         log.info("browser: started for \(type, privacy: .public)")
     }
 
     func stop() {
-        browseSource?.cancel()
-        browseSource = nil
-        if let r = browseRef { DNSServiceRefDeallocate(r); browseRef = nil }
-        for (_, (r, s)) in resolves { s.cancel(); DNSServiceRefDeallocate(r) }
+        if let src = browseSource {
+            src.cancel()
+            browseSource = nil
+            browseRef = nil
+        } else if let r = browseRef {
+            DNSServiceRefDeallocate(r)
+            browseRef = nil
+        }
+        for (_, src) in resolves { src.cancel() }
         resolves.removeAll()
         resolved.removeAll()
         onChange?([])
@@ -261,7 +284,8 @@ final class BonjourBrowser: @unchecked Sendable {
         guard fd >= 0 else { DNSServiceRefDeallocate(ref); return }
         let src = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
         src.setEventHandler { _ = DNSServiceProcessResult(ref) }
-        resolves[name] = (ref, src)
+        src.setCancelHandler { DNSServiceRefDeallocate(ref) }
+        resolves[name] = src
         src.resume()
     }
 
@@ -269,17 +293,12 @@ final class BonjourBrowser: @unchecked Sendable {
         let prev = resolved[r.name]
         resolved[r.name] = r
         // Once we have a result, we can tear down the in-flight resolve.
-        if let (ref, src) = resolves.removeValue(forKey: r.name) {
-            src.cancel()
-            DNSServiceRefDeallocate(ref)
-        }
+        resolves.removeValue(forKey: r.name)?.cancel()
         if prev != r { onChange?(Set(resolved.values)) }
     }
 
     private func removeResolved(name: String) {
-        if let (ref, src) = resolves.removeValue(forKey: name) {
-            src.cancel(); DNSServiceRefDeallocate(ref)
-        }
+        resolves.removeValue(forKey: name)?.cancel()
         if resolved.removeValue(forKey: name) != nil {
             onChange?(Set(resolved.values))
         }
