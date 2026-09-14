@@ -95,6 +95,8 @@ To create a distributable `.dmg` installer:
 
 This builds a Release configuration, embeds `libndi.dylib` inside the app bundle, and creates `build/OpenBeam.dmg`. Users just drag OpenBeam.app to Applications.
 
+To cut an actual release, use `./scripts/release.sh <version>` instead — it bumps the version, commits and tags in one step, and pushing that tag builds and publishes the DMG through GitHub Actions. See [CONTRIBUTING.md](CONTRIBUTING.md#release).
+
 > **Note:** For distribution to others, you should sign with a Developer ID certificate and notarize with Apple. See [Apple's documentation on notarization](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution).
 
 ## Credits

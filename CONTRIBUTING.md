@@ -65,14 +65,29 @@ matching `v*`. The workflow runs `scripts/build-dmg.sh` on a macOS runner, uploa
 commit history — which is the practical reason the commit rules above matter, as
 those subjects are what users read on the Releases page.
 
-To cut a release:
+To cut a release, run the script — it is the whole procedure:
 
-1. Bump `MARKETING_VERSION` in `OpenBeam.xcodeproj/project.pbxproj` (both the Debug
-   and Release configurations) to the version you are shipping.
-2. Commit it on its own: `chore(build): release vX.Y.Z`.
-3. Tag that commit `vX.Y.Z` and push the tag.
+```bash
+./scripts/release.sh 1.0.2          # bump, commit, tag
+./scripts/release.sh 1.0.2 --push   # ...and publish
+```
+
+It refuses to run on a dirty tree or a version that already has a tag, warns if
+you are not on `main`, bumps `MARKETING_VERSION` in **every** build configuration
+(Debug and Release each carry their own copy), verifies none were missed and that
+the project file is still valid, commits that bump alone as
+`chore(build): release vX.Y.Z`, and creates the annotated tag.
+
+Nothing is published until the tag is pushed, which is why `--push` is opt-in.
+Pushing the tag is the irreversible step: it triggers the workflow that builds the
+DMG and creates the public GitHub Release.
+
+Do not bump `MARKETING_VERSION` by hand and do not tag by hand. The two must agree
+— the tag is the version on the Releases page, `MARKETING_VERSION` is the version
+the app reports about itself, and a bug report naming a version that matches no
+build is expensive to chase. `scripts/build-dmg.sh` enforces this: when it builds
+from a tag it compares the two and fails the release rather than shipping the
+mismatch.
 
 Version numbers are semantic: bump the patch for fixes, the minor for new features,
-the major for a change that breaks an existing setup. Keep `MARKETING_VERSION` and
-the tag in step — a tag whose version does not match the build it produces makes
-bug reports much harder to place.
+the major for a change that breaks an existing setup.

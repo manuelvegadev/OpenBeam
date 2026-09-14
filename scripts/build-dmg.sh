@@ -16,6 +16,21 @@ BUILD_LOG="$BUILD_DIR/xcodebuild.log"
 VERSION=$(grep -m1 'MARKETING_VERSION' "$PROJECT/project.pbxproj" | sed 's/.*= *\(.*\);/\1/' | xargs)
 
 # ─── Preflight ────────────────────────────────────────────────────────
+
+# When building from a tag — which is how a release is produced — the tag is
+# the version users see on the Releases page, and MARKETING_VERSION is the
+# version the app reports about itself. If they disagree, a bug report naming
+# a version cannot be traced to a build, so refuse rather than ship the drift.
+TAG="${GITHUB_REF_NAME:-$(git -C "$PROJECT_DIR" describe --exact-match --tags 2>/dev/null || true)}"
+if [[ "$TAG" == v* ]]; then
+    if [ "$VERSION" != "${TAG#v}" ]; then
+        echo "ERROR: tag $TAG does not match MARKETING_VERSION $VERSION"
+        echo "       Releases are cut with ./scripts/release.sh <version>, which"
+        echo "       bumps, commits and tags together so these cannot diverge."
+        exit 1
+    fi
+    echo "==> Tag $TAG matches MARKETING_VERSION $VERSION"
+fi
 if [ ! -f "$PROJECT_DIR/NDI/libndi.dylib" ]; then
     echo "ERROR: NDI SDK not found at NDI/libndi.dylib"
     echo "Install the NDI SDK from https://ndi.video/for-developers/ndi-sdk/"
