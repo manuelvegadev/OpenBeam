@@ -34,7 +34,19 @@ final class NDISender: @unchecked Sendable {
     var bytesSent: Int64 { statsLock.withLock { $0.bytes } }
     var droppedFrames: Int64 { statsLock.withLock { $0.dropped } }
 
-    var isActive: Bool { queue.sync { ndiInstance != nil } }
+    // A copy of the handle readable without touching `queue`. The capture and
+    // audio threads consult it on every frame and every buffer, and `queue` is
+    // inside NDIlib_send_send_video_v2 for 5-9 ms of every 33 ms frame at
+    // 1080p30 — a sync hop onto it stalled them on roughly one frame in four.
+    //
+    // It does not extend the handle's lifetime: a reader that takes the pointer
+    // immediately before stop() can still hand it to libndi afterwards, exactly
+    // as the queue hop it replaces could. Closing that window means giving the
+    // handle a single owner across start, stop and both send paths, which is a
+    // change worth making on its own rather than smuggling in here.
+    private let liveInstance = OSAllocatedUnfairLock<NDIlib_send_instance_t?>(initialState: nil)
+
+    var isActive: Bool { liveInstance.withLock { $0 != nil } }
 
     func start() -> Bool {
         guard NDIlib_initialize() else {
@@ -58,12 +70,16 @@ final class NDISender: @unchecked Sendable {
         }
 
         queue.sync { ndiInstance = instance }
+        liveInstance.withLock { $0 = instance }
         print("[Open Beam] NDI sender started — source name: \(Self.sourceName)")
         return true
     }
 
     func send(pixelBuffer: CVPixelBuffer) {
-        guard queue.sync(execute: { ndiInstance != nil }) else { return }
+        // Same reason as `isActive`: this runs on the capture thread once per
+        // frame, and the async block below revalidates the instance on `queue`
+        // anyway, so this only needs to be a cheap early-out.
+        guard isActive else { return }
 
         // Drop frame if previous send is still in progress
         guard semaphore.wait(timeout: .now()) == .success else {
@@ -117,8 +133,9 @@ final class NDISender: @unchecked Sendable {
     }
 
     func send(audioBuffer buffer: AVAudioPCMBuffer) {
-        let instance: NDIlib_send_instance_t? = queue.sync { ndiInstance }
-        guard let instance else { return }
+        // Runs on the audio tap thread roughly every 21 ms; same reason as the
+        // video path for not hopping onto `queue` to read the handle.
+        guard let instance = liveInstance.withLock({ $0 }) else { return }
 
         let format = buffer.format
         guard format.commonFormat == .pcmFormatFloat32 else { return }
@@ -171,6 +188,8 @@ final class NDISender: @unchecked Sendable {
     }
 
     func stop() {
+        // Cleared before the teardown so no further frames are handed in.
+        liveInstance.withLock { $0 = nil }
         queue.sync {
             if let instance = ndiInstance {
                 NDIlib_send_send_video_v2(instance, nil)
