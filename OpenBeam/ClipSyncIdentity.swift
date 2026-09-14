@@ -3,14 +3,13 @@
 //  Open Beam
 //
 //  Long-term identity (Ed25519 signing key + X25519 key-exchange key) and
-//  paired-peer persistence for ClipSync v1. Private keys live in the Keychain
-//  as a single 64-byte blob; the device UUID and paired-peers list live in
-//  UserDefaults.
+//  paired-peer persistence for ClipSync v1. Private keys live in a 0600 file
+//  under Application Support as a single 64-byte blob; the device UUID and
+//  paired-peers list live in UserDefaults.
 //
 
 import Foundation
 import CryptoKit
-import Security
 import os
 
 // MARK: - Public records
@@ -57,7 +56,6 @@ final class ClipSyncIdentity: @unchecked Sendable {
         var pairedPeers: [PairedPeer] = []
     }
 
-    private static let keychainTag = "com.openbeam.clipsync.identity.v1"
     private static let peerIDKey = "com.openbeam.clipsync.deviceID"
     private static let pairedPeersKey = "com.openbeam.clipsync.peers.v1"
 
@@ -160,7 +158,7 @@ final class ClipSyncIdentity: @unchecked Sendable {
     }
 
     private static func loadOrCreateKeys() -> (Curve25519.Signing.PrivateKey, Curve25519.KeyAgreement.PrivateKey) {
-        if let blob = keychainLoad(), blob.count == 64 {
+        if let blob = identityLoad(), blob.count == 64 {
             do {
                 let sig = try Curve25519.Signing.PrivateKey(rawRepresentation: blob.prefix(32))
                 let kx = try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: blob.suffix(32))
@@ -174,7 +172,7 @@ final class ClipSyncIdentity: @unchecked Sendable {
         var blob = Data()
         blob.append(sig.rawRepresentation)
         blob.append(kx.rawRepresentation)
-        keychainSave(blob)
+        identitySave(blob)
         return (sig, kx)
     }
 
@@ -197,48 +195,58 @@ final class ClipSyncIdentity: @unchecked Sendable {
         }
     }
 
-    // MARK: - Keychain wrappers
+    // MARK: - Identity blob on disk
 
-    // The "data-protection" keychain (kSecUseDataProtectionKeychain) is the
-    // modern variant — bundle-id-based ACLs, no interactive prompts on read,
-    // and shared cleanly across code-signature changes for the same bundle.
-    // The legacy file-based keychain (default) prompts the user on read when
-    // the calling process's code signature is unfamiliar, which deadlocks our
-    // start() chain on rebuilt dev binaries.
-    private static func baseKeychainQuery() -> [String: Any] {
-        [
-            kSecClass as String:                      kSecClassGenericPassword,
-            kSecAttrService as String:                keychainTag,
-            kSecAttrAccount as String:                "identity",
-            kSecUseDataProtectionKeychain as String:  true,
-        ]
+    // The blob lives in a 0600 file under Application Support rather than the
+    // Keychain. The data-protection Keychain (kSecUseDataProtectionKeychain)
+    // requires a keychain-access-groups entitlement, which forces a
+    // provisioning profile into the bundle; a free-team profile carries
+    // TimeToLive 7, so the app stops launching a week after every build unless
+    // it is re-signed. A plain file keeps the bundle ad-hoc signable
+    // ("Sign to Run Locally") and valid indefinitely. The legacy file-based
+    // Keychain is not an option either: it prompts on read whenever the
+    // calling process's signature is unfamiliar, which deadlocks our start()
+    // chain on rebuilt dev binaries.
+    private static let identityFileURL: URL? = {
+        do {
+            let base = try FileManager.default.url(for: .applicationSupportDirectory,
+                                                  in: .userDomainMask,
+                                                  appropriateFor: nil,
+                                                  create: false)
+            let dir = base.appendingPathComponent("OpenBeam", isDirectory: true)
+            try FileManager.default.createDirectory(at: dir,
+                                                    withIntermediateDirectories: true,
+                                                    attributes: [.posixPermissions: 0o700])
+            return dir.appendingPathComponent("clipsync-identity.v1", isDirectory: false)
+        } catch {
+            print("[Open Beam] ClipSync identity directory: \(error)")
+            return nil
+        }
+    }()
+
+    private static func identityLoad() -> Data? {
+        guard let url = identityFileURL else { return nil }
+        do {
+            return try Data(contentsOf: url)
+        } catch let e as CocoaError where e.code == .fileReadNoSuchFile {
+            return nil   // first launch
+        } catch {
+            // Worth a line: we are about to mint a new identity over a blob we
+            // could not read, which silently unpairs every peer.
+            print("[Open Beam] ClipSync identity load: \(error)")
+            return nil
+        }
     }
 
-    private static func keychainLoad() -> Data? {
-        var q = baseKeychainQuery()
-        q[kSecReturnData as String] = true
-        q[kSecMatchLimit as String] = kSecMatchLimitOne
-        var out: AnyObject?
-        let status = SecItemCopyMatching(q as CFDictionary, &out)
-        if status == errSecSuccess { return out as? Data }
-        if status != errSecItemNotFound {
-            print("[Open Beam] ClipSync keychain load: OSStatus \(status)")
-        }
-        return nil
-    }
-
-    private static func keychainSave(_ data: Data) {
-        let base = baseKeychainQuery()
-        let update: [String: Any] = [kSecValueData as String: data]
-        var status = SecItemUpdate(base as CFDictionary, update as CFDictionary)
-        if status == errSecItemNotFound {
-            var add = base
-            add[kSecValueData as String] = data
-            add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-            status = SecItemAdd(add as CFDictionary, nil)
-        }
-        if status != errSecSuccess {
-            print("[Open Beam] ClipSync keychain save: OSStatus \(status)")
+    private static func identitySave(_ data: Data) {
+        guard let url = identityFileURL else { return }
+        do {
+            try data.write(to: url, options: [.atomic])
+            // .atomic swaps in a fresh file, so tighten the mode afterwards.
+            try FileManager.default.setAttributes([.posixPermissions: 0o600],
+                                                 ofItemAtPath: url.path)
+        } catch {
+            print("[Open Beam] ClipSync identity save: \(error)")
         }
     }
 }

@@ -2,9 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>keychain-access-groups</key>
-	<array>
-		<string>$(AppIdentifierPrefix)manuelvegadev.OpenBeam</string>
-	</array>
+	<!-- Deliberately empty. Anything that needs a provisioning profile (app
+	     sandbox, iCloud, keychain-access-groups, …) would pin the bundle to a
+	     7-day free-team profile and force a weekly re-sign. -->
 </dict>
 </plist>
