@@ -73,7 +73,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         buildStatusItem()
         startPipeline()
         startStatsTimer()
-        netMonitor.start()
         clipSyncManager.onStateChanged = { [weak self] in
             // No persistent submenu items to mutate eagerly; the menu rebuilds on open.
             _ = self
@@ -507,6 +506,7 @@ extension AppDelegate: NSMenuDelegate {
         if menu === statusItem.menu {
             menuIsOpen = true
             startLevelTimer()
+            netMonitor.start()
             pixelFormatToggleItem.state = (cameraController.pixelFormat == .uyvy422) ? .on : .off
         }
     }
@@ -515,6 +515,7 @@ extension AppDelegate: NSMenuDelegate {
         if menu === statusItem.menu {
             menuIsOpen = false
             stopLevelTimer()
+            netMonitor.stop()
         }
     }
 

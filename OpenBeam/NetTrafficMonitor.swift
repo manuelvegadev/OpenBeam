@@ -2,11 +2,18 @@
 //  NetTrafficMonitor.swift
 //  Open Beam
 //
-//  Per-process wire-bandwidth measurement by piping `nettop -P -p <pid>` and
-//  parsing its CSV stream. macOS exposes no public per-process network byte
-//  counter (`rusage_info_v6` has disk + memory but no network; `proc_pidfdinfo`
-//  returns socket state, not cumulative TCP `tcpi_txbytes`), so we delegate
-//  to nettop the same way the user's terminal command does.
+//  Per-process wire-bandwidth measurement. macOS exposes no public per-process
+//  network byte counter (`rusage_info_v6` has disk + memory but no network;
+//  `proc_pidfdinfo` returns socket state, not cumulative TCP `tcpi_txbytes`),
+//  so we read nettop's cumulative `bytes_out` and difference it ourselves.
+//
+//  Sampled as a one-shot per tick rather than a long-lived `nettop -L 0` child,
+//  because that mode burns ~1.45 s of CPU for every second it samples
+//  (measured identical at -s 1, -s 5 and -s 10, so the interval is not the
+//  lever), never exits on its own — a crash or force quit stranded it spinning
+//  under launchd until reboot — and line-buffers only to a terminal, so a Pipe
+//  reader starves for seconds at a time. A `-L 1` one-shot has none of those
+//  properties and costs nothing measurable.
 //
 
 import Foundation
@@ -14,93 +21,92 @@ import os
 
 final class NetTrafficMonitor: @unchecked Sendable {
 
+    /// A kept baseline older than this spans too much idle time to difference
+    /// against, so the next sample re-seeds instead.
+    private static let staleBaselineSeconds: CFAbsoluteTime = 10
+
     private let queue = DispatchQueue(label: "com.openbeam.nettop", qos: .utility)
-    private var process: Process?
-    private var pipe: Pipe?
-    private var readBuffer = Data()
+    private var timer: DispatchSourceTimer?
 
     private let lock = OSAllocatedUnfairLock(initialState: State())
     private struct State {
-        var lastBytesOut: Int64 = -1
+        /// Previous reading, nil until the first sample seeds it.
+        var last: (bytes: Int64, at: CFAbsoluteTime)?
         var bytesPerSecondOut: Double = 0
     }
 
     var bytesPerSecondOut: Double { lock.withLock { $0.bytesPerSecondOut } }
 
+    /// Only worth sampling while something can display the figure, so the
+    /// caller ties this to menu visibility.
     func start() {
         stop()
+        let t = DispatchSource.makeTimerSource(queue: queue)
+        t.schedule(deadline: .now(), repeating: .seconds(1), leeway: .milliseconds(200))
+        t.setEventHandler { [weak self] in self?.sample() }
+        timer = t
+        t.resume()
+    }
 
+    /// Keeps the baseline so a reopen inside `staleBaselineSeconds` reports a
+    /// real figure on its first tick rather than zero.
+    func stop() {
+        timer?.cancel()
+        timer = nil
+        lock.withLock { $0.bytesPerSecondOut = 0 }
+    }
+
+    // MARK: - Sampling
+
+    private func sample() {
+        guard let bytes = Self.readCumulativeBytesOut() else { return }
+        let now = CFAbsoluteTimeGetCurrent()
+        lock.withLock { st in
+            let prev = st.last
+            st.last = (bytes, now)
+            guard let prev, now > prev.at, now - prev.at <= Self.staleBaselineSeconds else { return }
+            st.bytesPerSecondOut = Double(max(bytes - prev.bytes, 0)) / (now - prev.at)
+        }
+    }
+
+    // The pid cannot change within a process lifetime, so the invocation is
+    // fixed for the life of the app.
+    private static let nettopURL = URL(fileURLWithPath: "/usr/bin/nettop")
+    private static let nettopArguments = [
+        "-P",                                          // per-process summary only
+        "-p", "\(ProcessInfo.processInfo.processIdentifier)",
+        "-L", "1",                                     // a single sample, then exit
+        "-J", "bytes_out",                             // emit only what we need
+        "-x"                                           // raw numbers, no MiB suffixes
+    ]
+
+    /// One `nettop` sample: a CSV header (`,bytes_out,`) then one data line per
+    /// matched process, `OpenBeam.<pid>,<cumulative bytes_out>,`.
+    private static func readCumulativeBytesOut() -> Int64? {
         let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/nettop")
-        p.arguments = [
-            "-P",                                          // parseable CSV mode
-            "-p", "\(ProcessInfo.processInfo.processIdentifier)",
-            "-L", "0",                                     // run continuously
-            "-s", "1",                                     // 1s sample interval
-            "-J", "bytes_out",                             // emit only what we need
-            "-x"                                           // line-buffered output
-        ]
+        p.executableURL = nettopURL
+        p.arguments = nettopArguments
         let outPipe = Pipe()
         p.standardOutput = outPipe
         p.standardError = FileHandle.nullDevice
 
-        outPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            guard !data.isEmpty else { return }
-            self?.queue.async { self?.ingest(data) }
-        }
-
         do {
             try p.run()
-            self.process = p
-            self.pipe = outPipe
         } catch {
             print("[Open Beam] NetTrafficMonitor: nettop failed to start: \(error)")
+            return nil
         }
-    }
+        // Read to EOF before waiting: a child blocked on a full pipe would
+        // otherwise deadlock against waitUntilExit.
+        let data = outPipe.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
 
-    func stop() {
-        pipe?.fileHandleForReading.readabilityHandler = nil
-        if let p = process, p.isRunning {
-            p.terminate()
+        guard let text = String(data: data, encoding: .utf8) else { return nil }
+        for line in text.split(separator: "\n") {
+            let cols = line.split(separator: ",", omittingEmptySubsequences: true)
+            if cols.count >= 2, let bytesOut = Int64(cols[1]) { return bytesOut }
         }
-        process = nil
-        pipe = nil
-        queue.async { [weak self] in
-            self?.readBuffer.removeAll()
-            self?.lock.withLock {
-                $0.lastBytesOut = -1
-                $0.bytesPerSecondOut = 0
-            }
-        }
-    }
-
-    private func ingest(_ data: Data) {
-        readBuffer.append(data)
-        while let nl = readBuffer.firstIndex(of: 0x0A) {
-            let line = readBuffer.subdata(in: readBuffer.startIndex..<nl)
-            readBuffer.removeSubrange(readBuffer.startIndex...nl)
-            guard let s = String(data: line, encoding: .utf8) else { continue }
-            handle(line: s)
-        }
-    }
-
-    /// nettop emits a CSV header (`,bytes_out,`) then one data line per sample
-    /// looking like `OpenBeam.<pid>,<cumulative bytes_out>,`. We compute the
-    /// delta between consecutive samples; each sample is ~1s.
-    private func handle(line: String) {
-        let cols = line.split(separator: ",", omittingEmptySubsequences: true)
-        guard cols.count >= 2, let bytesOut = Int64(cols[1]) else { return }
-
-        lock.withLock { st in
-            if st.lastBytesOut < 0 {
-                st.lastBytesOut = bytesOut
-                return
-            }
-            let delta = bytesOut - st.lastBytesOut
-            st.lastBytesOut = bytesOut
-            st.bytesPerSecondOut = Double(max(delta, 0))
-        }
+        return nil
     }
 
     deinit { stop() }
