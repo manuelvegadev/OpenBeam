@@ -1,4 +1,4 @@
-# Open Beam
+# OpenBeam
 
 <p align="center">
 <img width="678" height="419" alt="image" src="https://github.com/user-attachments/assets/0742cb95-6864-40ca-a8ff-3f2164280688" /><br>
@@ -14,13 +14,15 @@ A lightweight native macOS menu bar app that sends a USB webcam as an NDI source
 
 ## Features
 
-- **Zero-dependency** — pure AppKit, no Electron, no browser tech, no OBS required
+- **Native** — AppKit and SwiftUI, no Electron, no browser tech, no OBS required
 - **Menu bar only** — lives in the system tray with a live camera preview
 - **Send and Receive** — one machine sends its camera, the other receives it and hands it to video calls as a webcam
 - **NDI output** — advertises your machine name as the NDI source, visible to any NDI receiver on the local network
 - **Camera selection** — switch between built-in and external USB cameras
 - **macOS Camera Effects** — works with Apple's built-in portrait mode, background replacement, and reactions (via the green camera button)
 - **Live statistics** — resolution, capture/NDI FPS, data rate, frame counts
+- **Clipboard sync** — copy on one machine, paste on another, between devices you pair by hand
+- **Updates itself** — a daily check that adds a line to the menu instead of interrupting your call
 - **Lightweight** — no GPU compositing overhead, direct pixel buffer passthrough to NDI
 
 ## Send and Receive
@@ -35,18 +37,26 @@ stops the camera, the microphone and this machine's own NDI source.
   the microphone `NDI Audio`.
 
 Receive needs [NDI Tools](https://ndi.video/tools/) installed once, for its camera extension and
-audio driver. Open Beam only tells that extension which source to take: the video and audio go
+audio driver. OpenBeam only tells that extension which source to take: the video and audio go
 straight from the network into it, so nothing passes through this app and the camera keeps
-working after Open Beam quits. NDI Virtual Input itself never has to be open.
+working after OpenBeam quits. NDI Virtual Input itself never has to be open.
 
 Two things macOS reserves for the user: approving the extension the first time, and choosing
 `NDI Virtual Camera` / `NDI Audio` inside the video call app. No app can do either for you.
 
 ## Install
 
-Download `OpenBeam.dmg` from [Releases](https://github.com/manuelvegadev/OpenBeam/releases), open it, and drag Open Beam to Applications.
+Download `OpenBeam.dmg` from [Releases](https://github.com/manuelvegadev/OpenBeam/releases), open it, and drag OpenBeam to Applications. Open it from there rather than from the disk image — an app cannot update itself while running from a read-only mount.
+
+OpenBeam is signed, but not with a paid Apple Developer certificate, so the first launch needs one trip through **System Settings → Privacy & Security → Open Anyway**. Updates after that install themselves, and each one is verified against an EdDSA key built into the app.
 
 > No NDI SDK installation needed — `libndi.dylib` is bundled inside the app.
+
+Full documentation is at **[manuelvegadev.github.io/OpenBeam](https://manuelvegadev.github.io/OpenBeam/)**.
+
+## Settings
+
+**Settings…** in the menu bar opens a window with three panes: **General** (open at login, UYVY sending), **Updates** (automatic checks, background downloads, the running version) and **Clipboard** (sync, and the devices you have paired).
 
 ## Requirements
 
@@ -112,14 +122,14 @@ Frames pass directly from the camera to NDI with no intermediate processing. mac
 **Frame pipeline — Receive:**
 
 ```
-Open Beam ──CMIOObjectSetPropertyData('ndis')──→ NDI camera extension ──→ any video call app
+OpenBeam ──CMIOObjectSetPropertyData('ndis')──→ NDI camera extension ──→ any video call app
                                                  (receives the source itself)
 
 NDIlib_recv (proxy stream) → CALayer.contents (preview, only while the menu is open)
 ```
 
-The full-resolution video never passes through Open Beam: the extension and the `NDIAudio` HAL
-driver each receive the source themselves. All Open Beam does is write the source name into the
+The full-resolution video never passes through OpenBeam: the extension and the `NDIAudio` HAL
+driver each receive the source themselves. All OpenBeam does is write the source name into the
 extension's custom CoreMediaIO property, which is what NDI Virtual Input does too.
 
 ## Building a DMG
@@ -138,9 +148,12 @@ To cut an actual release, use `./scripts/release.sh <version>` instead — it bu
 
 ## Credits
 
-- [NDI](https://ndi.video/) — Network Device Interface SDK by Vizrt. Open Beam uses the NDI SDK to broadcast video over the local network.
+- [NDI](https://ndi.video/) — Network Device Interface SDK by Vizrt. OpenBeam uses the NDI SDK to broadcast video over the local network.
 - [Phosphor Icons](https://phosphoricons.com/) — app icon and menu bar icon use the Phosphor webcam glyph.
 
 ## License
 
-MIT
+[MIT](LICENSE) © 2026 Manuel Vega.
+
+The bundled NDI SDK (`libndi.dylib`) is redistributed under Vizrt's own NDI SDK licence and is
+not covered by the above. NDI® is a registered trademark of Vizrt NDI AB.

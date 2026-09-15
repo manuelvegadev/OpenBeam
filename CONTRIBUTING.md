@@ -1,4 +1,4 @@
-# Contributing to Open Beam
+# Contributing to OpenBeam
 
 Known work that is understood but not done is in [BACKLOG.md](BACKLOG.md), with the
 measurements behind each item.
@@ -25,9 +25,11 @@ Optional body explaining why the change was needed.
 | `clipsync` | Everything under the `ClipSync*` files: discovery, pairing, transport, identity |
 | `share` | `SharePlugin.swift`, file transfer |
 | `menu` | `AppDelegate.swift`, the status item, preview and stats UI |
+| `settings` | Everything under `OpenBeam/Settings/`: the settings window, updates, login item |
 | `stats` | `NetTrafficMonitor.swift` and the statistics pipeline |
 | `signing` | Entitlements, code-signing settings, provisioning |
 | `build` | `scripts/`, the Xcode project, CI workflows |
+| `site` | Everything under `site/`: the landing page and the docs |
 
 Write the summary in the imperative, lowercase, with no trailing period, and keep
 it under about 72 characters: `fix(clipsync): drop stale peers on disconnect`, not
@@ -63,10 +65,17 @@ they touch.
 ## Release
 
 Releases are built by `.github/workflows/release.yml`, which triggers on any tag
-matching `v*`. The workflow runs `scripts/build-dmg.sh` on a macOS runner, uploads
-`build/OpenBeam.dmg` to a GitHub Release, and generates the release notes from the
-commit history — which is the practical reason the commit rules above matter, as
-those subjects are what users read on the Releases page.
+matching `v*`. On a macOS runner it runs `scripts/build-dmg.sh` (which produces both
+`OpenBeam.dmg` for first-time installs and `OpenBeam-<version>.zip` for Sparkle), then
+`scripts/make-appcast.sh` to sign that archive and fold it into the update feed, uploads
+all of it to a GitHub Release, and finally calls `.github/workflows/pages.yml` to publish
+the site with the new appcast. Release notes are generated from the commit history —
+which is the practical reason the commit rules above matter, as those subjects are what
+users read both on the Releases page and inside Sparkle's update window.
+
+The Pages deploy is *called* from the release workflow rather than triggered by
+`on: release`, because a release created with `GITHUB_TOKEN` does not trigger workflow
+runs. An `on: release` deploy would never fire, and the appcast would never update.
 
 To cut a release, run the script — it is the whole procedure:
 
@@ -94,3 +103,46 @@ mismatch.
 
 Version numbers are semantic: bump the patch for fixes, the minor for new features,
 the major for a change that breaks an existing setup.
+
+`Info.plist` derives `CFBundleVersion` from `MARKETING_VERSION`, because Sparkle compares
+`CFBundleVersion` to decide what is newer and `CURRENT_PROJECT_VERSION` is not something
+anyone remembers to bump. Do not undo that: an update that reports the same build number
+as the version it replaces is an update nobody is ever offered.
+
+## The Sparkle signing key
+
+OpenBeam is ad-hoc signed and not notarized, so Sparkle's code-signature check can never
+pass across an update — its designated requirement pins a per-binary cdhash. The EdDSA
+signature on the update archive is therefore the *only* thing standing between a user and
+a hostile update.
+
+Set up once, with Sparkle's tools from the resolved package
+(`.derived/SourcePackages/artifacts/sparkle/Sparkle/bin/`):
+
+```bash
+./generate_keys                      # stores the private key in your login Keychain
+                                     # and prints the public key
+./generate_keys -x sparkle_private.key   # export it for CI
+```
+
+- The **public** key goes in `Info.plist` as `SUPublicEDKey`.
+- The **private** key goes in the GitHub secret `SPARKLE_PRIVATE_KEY`. Back it up
+  somewhere safe and delete the exported file.
+
+`scripts/build-dmg.sh` refuses to build while `SUPublicEDKey` is still the placeholder.
+With a key Sparkle cannot use, it does not start: every launch opens with a modal
+"Unable to Check For Updates — the updater failed to start", "Check for Updates…" stays
+greyed out, and no build can ever update itself. The guard is there so that never
+reaches a release.
+
+Losing the private key means no installed copy can ever be updated again — and with
+ad-hoc signing there is no code-signing path to fall back on. Rotating it requires
+everyone to reinstall by hand.
+
+## The site
+
+`site/landing` is a Vite + React page and `site/docs` is an Rspress site; the Pages
+workflow builds both and serves them at `/` and `/docs/`. Docs content is plain Markdown
+under `site/docs/docs/`, organised by what the reader is trying to do — get started,
+follow a guide, look something up, or fix something — rather than by feature. Keep new
+pages in whichever of those four a reader would look in.
