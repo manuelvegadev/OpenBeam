@@ -66,4 +66,8 @@ grep -q "$APP_NAME-$VERSION.zip" "$OUT_DIR/appcast.xml" \
     || die "appcast.xml does not mention $APP_NAME-$VERSION.zip — the release would advertise nothing"
 
 echo "==> Appcast written to $OUT_DIR/appcast.xml"
-grep -o 'sparkle:version="[^"]*"' "$OUT_DIR/appcast.xml" | sed 's/^/    /'
+# Informational only, and deliberately incapable of failing the release: this
+# runs under `set -o pipefail`, where an unmatched grep in a summary line is
+# enough to abandon a build that has already produced everything it needed.
+sed -n 's|.*<sparkle:version>\(.*\)</sparkle:version>.*|    advertising \1|p' \
+    "$OUT_DIR/appcast.xml" || true
