@@ -1,5 +1,8 @@
 # Contributing to Open Beam
 
+Known work that is understood but not done is in [BACKLOG.md](BACKLOG.md), with the
+measurements behind each item.
+
 ## Commits
 
 Every commit message follows [Conventional Commits](https://www.conventionalcommits.org/):
