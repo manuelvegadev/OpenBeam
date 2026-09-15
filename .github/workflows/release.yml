@@ -23,11 +23,44 @@ jobs:
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
-      - name: Build DMG
+      - name: Cache resolved packages
+        uses: actions/cache@v4
+        with:
+          path: .derived/SourcePackages
+          key: spm-${{ hashFiles('OpenBeam.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: spm-
+
+      - name: Build DMG and update archive
         run: ./scripts/build-dmg.sh
+
+      - name: Sign the update and generate the appcast
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: ./scripts/make-appcast.sh "${GITHUB_REF_NAME#v}"
+
+      - name: Upload the appcast for the Pages deploy
+        uses: actions/upload-artifact@v4
+        with:
+          name: appcast
+          path: build/appcast/appcast.xml
+          retention-days: 1
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: build/OpenBeam.dmg
+          files: |
+            build/OpenBeam.dmg
+            build/OpenBeam-*.zip
           generate_release_notes: true
+
+  # Publishes the site with the appcast this release just produced. Sparkle
+  # cannot see the new version until this runs.
+  pages:
+    needs: build
+    uses: ./.github/workflows/pages.yml
+    with:
+      appcast-artifact: appcast
+    permissions:
+      contents: read
+      pages: write
+      id-token: write

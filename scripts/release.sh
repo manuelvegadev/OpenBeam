@@ -9,10 +9,9 @@ set -euo pipefail
 # Usage: ./scripts/release.sh <version> [--push]
 #        ./scripts/release.sh 1.0.2
 
-PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-PBXPROJ="$PROJECT_DIR/OpenBeam.xcodeproj/project.pbxproj"
+source "$(dirname "$0")/lib.sh"
 
-die() { echo "ERROR: $*" >&2; exit 1; }
+PBXPROJ="$PROJECT/project.pbxproj"
 
 # ─── Arguments ────────────────────────────────────────────────────────
 VERSION="${1:-}"
@@ -42,7 +41,7 @@ if [ "$BRANCH" != "main" ]; then
     [ "$reply" = "y" ] || [ "$reply" = "Y" ] || die "aborted"
 fi
 
-CURRENT="$(grep -m1 'MARKETING_VERSION' "$PBXPROJ" | sed 's/.*= *\(.*\);/\1/' | xargs)"
+CURRENT="$(marketing_version)"
 COUNT="$(grep -c 'MARKETING_VERSION' "$PBXPROJ")"
 [ "$COUNT" -ge 1 ] || die "no MARKETING_VERSION found in project.pbxproj"
 
@@ -61,7 +60,7 @@ plutil -lint "$PBXPROJ" >/dev/null || die "project.pbxproj is malformed after th
 # ─── Commit and tag ───────────────────────────────────────────────────
 git add "$PBXPROJ"
 git commit -q -m "chore(build): release $TAG"
-git tag -a "$TAG" -m "Open Beam $TAG"
+git tag -a "$TAG" -m "OpenBeam $TAG"
 
 echo "==> committed and tagged $TAG"
 
