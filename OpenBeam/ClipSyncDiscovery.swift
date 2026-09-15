@@ -1,6 +1,6 @@
 //
 //  ClipSyncDiscovery.swift
-//  Open Beam
+//  OpenBeam
 //
 //  mDNS advertise + browse for ClipSync v1 (`_clipsync._tcp`). Filters out our
 //  own peerID and dedupes peers across multiple network interfaces.

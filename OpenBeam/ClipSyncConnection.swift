@@ -1,6 +1,6 @@
 //
 //  ClipSyncConnection.swift
-//  Open Beam
+//  OpenBeam
 //
 //  One TCP NWConnection per peer. Owns the cleartext hello handshake, the
 //  ECDH+HKDF session-key derivation, the ChaCha20-Poly1305 frame seal/open,

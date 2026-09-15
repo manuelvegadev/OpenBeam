@@ -1,6 +1,6 @@
 //
 //  ClipSyncManager.swift
-//  Open Beam
+//  OpenBeam
 //
 //  Top-level coordinator for ClipSync: owns identity + discovery + plugins,
 //  manages live connections per peer, exposes the menu-facing API.
@@ -251,7 +251,7 @@ extension ClipSyncManager: ClipSyncConnectionDelegate {
               ack.peerID == peerHello.peerID,
               ack.sigPub == peerHello.sigPub,
               ack.kxPub == peerHello.kxPub else {
-            print("[Open Beam] ClipSync pair_accept identity mismatch — aborting")
+            print("[OpenBeam] ClipSync pair_accept identity mismatch — aborting")
             c.cancel()
             return
         }
@@ -276,7 +276,7 @@ extension ClipSyncManager: ClipSyncConnectionDelegate {
     }
 
     func connection(_ c: ClipSyncConnection, didReceivePairReject rej: PairRejectFrame) {
-        print("[Open Beam] ClipSync pair_reject: \(rej.reason)")
+        print("[OpenBeam] ClipSync pair_reject: \(rej.reason)")
         c.cancel()
     }
 
@@ -307,7 +307,7 @@ extension ClipSyncManager: ClipSyncConnectionDelegate {
 
     func connectionDidClose(_ c: ClipSyncConnection, error: Error?) {
         if let error {
-            print("[Open Beam] ClipSync connection closed with error: \(error)")
+            print("[OpenBeam] ClipSync connection closed with error: \(error)")
         }
         let peerID = c.peerID
         lock.withLock { state in

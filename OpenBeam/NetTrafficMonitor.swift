@@ -1,6 +1,6 @@
 //
 //  NetTrafficMonitor.swift
-//  Open Beam
+//  OpenBeam
 //
 //  Per-process wire-bandwidth measurement. macOS exposes no public per-process
 //  network byte counter (`rusage_info_v6` has disk + memory but no network;
@@ -93,7 +93,7 @@ final class NetTrafficMonitor: @unchecked Sendable {
         do {
             try p.run()
         } catch {
-            print("[Open Beam] NetTrafficMonitor: nettop failed to start: \(error)")
+            print("[OpenBeam] NetTrafficMonitor: nettop failed to start: \(error)")
             return nil
         }
         // Read to EOF before waiting: a child blocked on a full pipe would

@@ -1,6 +1,6 @@
 //
 //  ClipboardPlugin.swift
-//  Open Beam
+//  OpenBeam
 //
 //  Pasteboard polling + text-clipboard send/receive. Owns the shared
 //  PasteboardWatcher (a 0.4s timer that hops to main); SharePlugin subscribes
@@ -184,13 +184,13 @@ final class ClipboardPlugin: @unchecked Sendable {
     private func handle(snapshot: PasteboardSnapshot, changeCount: Int) {
         switch snapshot {
         case .text(let s):
-            print("[Open Beam] ClipSync: pasteboard text change cc=\(changeCount)")
+            print("[OpenBeam] ClipSync: pasteboard text change cc=\(changeCount)")
             broadcastText(s)
         case .fileURLs(let urls):
-            print("[Open Beam] ClipSync: pasteboard files change cc=\(changeCount) count=\(urls.count)")
+            print("[OpenBeam] ClipSync: pasteboard files change cc=\(changeCount) count=\(urls.count)")
             onFileURLs?(urls, changeCount)
         case .empty:
-            print("[Open Beam] ClipSync: pasteboard change cc=\(changeCount) (empty/unsupported type)")
+            print("[OpenBeam] ClipSync: pasteboard change cc=\(changeCount) (empty/unsupported type)")
         }
     }
 
@@ -198,7 +198,7 @@ final class ClipboardPlugin: @unchecked Sendable {
         let utf8 = Data(s.utf8)
         guard !utf8.isEmpty, utf8.count <= ClipSync.maxTextBytes else {
             if utf8.count > ClipSync.maxTextBytes {
-                print("[Open Beam] ClipSync: skipping text \(utf8.count) B (cap \(ClipSync.maxTextBytes))")
+                print("[OpenBeam] ClipSync: skipping text \(utf8.count) B (cap \(ClipSync.maxTextBytes))")
             }
             return
         }
@@ -209,11 +209,11 @@ final class ClipboardPlugin: @unchecked Sendable {
             return true
         }
         guard shouldSend else {
-            print("[Open Beam] ClipSync: text dedup skip (hash matches recent broadcast/apply)")
+            print("[OpenBeam] ClipSync: text dedup skip (hash matches recent broadcast/apply)")
             return
         }
         guard let payload = makeTextPayload(s, kind: "clipboard.text") else { return }
-        print("[Open Beam] ClipSync: broadcasting text \(utf8.count) B, hasBroadcaster=\(broadcast != nil)")
+        print("[OpenBeam] ClipSync: broadcasting text \(utf8.count) B, hasBroadcaster=\(broadcast != nil)")
         broadcast?(payload)
     }
 

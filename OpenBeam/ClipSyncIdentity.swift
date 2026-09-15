@@ -1,6 +1,6 @@
 //
 //  ClipSyncIdentity.swift
-//  Open Beam
+//  OpenBeam
 //
 //  Long-term identity (Ed25519 signing key + X25519 key-exchange key) and
 //  paired-peer persistence for ClipSync v1. Private keys live in a 0600 file
@@ -164,7 +164,7 @@ final class ClipSyncIdentity: @unchecked Sendable {
                 let kx = try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: blob.suffix(32))
                 return (sig, kx)
             } catch {
-                print("[Open Beam] ClipSync identity blob corrupt — regenerating: \(error)")
+                print("[OpenBeam] ClipSync identity blob corrupt — regenerating: \(error)")
             }
         }
         let sig = Curve25519.Signing.PrivateKey()
@@ -181,7 +181,7 @@ final class ClipSyncIdentity: @unchecked Sendable {
         do {
             return try JSONDecoder().decode([PairedPeer].self, from: data)
         } catch {
-            print("[Open Beam] ClipSync paired peers blob corrupt — clearing: \(error)")
+            print("[OpenBeam] ClipSync paired peers blob corrupt — clearing: \(error)")
             return []
         }
     }
@@ -191,7 +191,7 @@ final class ClipSyncIdentity: @unchecked Sendable {
             let data = try JSONEncoder().encode(peers)
             UserDefaults.standard.set(data, forKey: pairedPeersKey)
         } catch {
-            print("[Open Beam] ClipSync failed to persist paired peers: \(error)")
+            print("[OpenBeam] ClipSync failed to persist paired peers: \(error)")
         }
     }
 
@@ -219,7 +219,7 @@ final class ClipSyncIdentity: @unchecked Sendable {
                                                     attributes: [.posixPermissions: 0o700])
             return dir.appendingPathComponent("clipsync-identity.v1", isDirectory: false)
         } catch {
-            print("[Open Beam] ClipSync identity directory: \(error)")
+            print("[OpenBeam] ClipSync identity directory: \(error)")
             return nil
         }
     }()
@@ -233,7 +233,7 @@ final class ClipSyncIdentity: @unchecked Sendable {
         } catch {
             // Worth a line: we are about to mint a new identity over a blob we
             // could not read, which silently unpairs every peer.
-            print("[Open Beam] ClipSync identity load: \(error)")
+            print("[OpenBeam] ClipSync identity load: \(error)")
             return nil
         }
     }
@@ -246,7 +246,7 @@ final class ClipSyncIdentity: @unchecked Sendable {
             try FileManager.default.setAttributes([.posixPermissions: 0o600],
                                                  ofItemAtPath: url.path)
         } catch {
-            print("[Open Beam] ClipSync identity save: \(error)")
+            print("[OpenBeam] ClipSync identity save: \(error)")
         }
     }
 }

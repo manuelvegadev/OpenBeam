@@ -1,6 +1,6 @@
 //
 //  SharePlugin.swift
-//  Open Beam
+//  OpenBeam
 //
 //  File transfer over the encrypted ClipSync channel. Sends file URLs found
 //  on the local pasteboard as `share.begin` + `share.chunk*` + `share.end`;
@@ -59,7 +59,7 @@ final class SharePlugin: @unchecked Sendable {
 
     private func broadcastFiles(_ urls: [URL]) {
         guard urls.count <= ClipSync.maxShareFileCount else {
-            print("[Open Beam] ClipSync share: \(urls.count) files exceeds cap \(ClipSync.maxShareFileCount)")
+            print("[OpenBeam] ClipSync share: \(urls.count) files exceeds cap \(ClipSync.maxShareFileCount)")
             return
         }
 
@@ -72,16 +72,16 @@ final class SharePlugin: @unchecked Sendable {
                   let size = attrs[.size] as? NSNumber,
                   let kind = attrs[.type] as? FileAttributeType,
                   kind == .typeRegular else {
-                print("[Open Beam] ClipSync share: skipping unreadable URL \(url.path)")
+                print("[OpenBeam] ClipSync share: skipping unreadable URL \(url.path)")
                 return
             }
             total &+= size.int64Value
             if total > ClipSync.maxShareTotalBytes {
-                print("[Open Beam] ClipSync share: total \(total) B exceeds cap \(ClipSync.maxShareTotalBytes) — skipping")
+                print("[OpenBeam] ClipSync share: total \(total) B exceeds cap \(ClipSync.maxShareTotalBytes) — skipping")
                 return
             }
             guard let sha = Self.sha256Hex(of: resolved) else {
-                print("[Open Beam] ClipSync share: hash failed for \(url.path)")
+                print("[OpenBeam] ClipSync share: hash failed for \(url.path)")
                 return
             }
             metas.append(ShareFileMeta(name: resolved.lastPathComponent, size: size.int64Value, sha256: sha))

@@ -1,6 +1,6 @@
 //
 //  NDIReceiver.swift
-//  Open Beam
+//  OpenBeam
 //
 //  NDI reception for the menu preview and the level meter.
 //
@@ -75,18 +75,18 @@ final class NDIReceiver: @unchecked Sendable {
             }
 
             guard let created else {
-                print("[Open Beam] NDIlib_recv_create_v3 failed for \(source)")
+                print("[OpenBeam] NDIlib_recv_create_v3 failed for \(source)")
                 self.state.withLock { if $0.generation == generation { $0.running = false } }
                 NDIRuntime.release()
                 return
             }
 
-            print("[Open Beam] NDI receiver started — source: \(source)")
+            print("[OpenBeam] NDI receiver started — source: \(source)")
             self.captureLoop(created, generation: generation)
 
             NDIlib_recv_destroy(created)
             NDIRuntime.release()
-            print("[Open Beam] NDI receiver stopped")
+            print("[OpenBeam] NDI receiver stopped")
         }
     }
 

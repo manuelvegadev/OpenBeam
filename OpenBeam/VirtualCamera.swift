@@ -1,6 +1,6 @@
 //
 //  VirtualCamera.swift
-//  Open Beam
+//  OpenBeam
 //
 //  Control of the NDI Virtual Camera device through CoreMediaIO.
 //
@@ -10,7 +10,7 @@ import CoreMediaIO
 
 /// The camera extension NDI Tools installs links libndi and receives NDI by
 /// itself, so it takes a *source name* rather than frames: nothing of the video
-/// passes through us, and the camera keeps running after Open Beam quits.
+/// passes through us, and the camera keeps running after OpenBeam quits.
 ///
 /// The extension declares the name as a custom CoreMediaIO property,
 /// `4cc_ndis_glob_0000`, which its own app sets through the public
@@ -88,7 +88,7 @@ enum VirtualCamera {
                                       UInt32(MemoryLayout<CFString>.size), pointer)
         }
         if status != noErr {
-            print("[Open Beam] could not set the virtual camera source: \(status)")
+            print("[OpenBeam] could not set the virtual camera source: \(status)")
         }
     }
 

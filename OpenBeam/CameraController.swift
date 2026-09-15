@@ -1,6 +1,6 @@
 //
 //  CameraController.swift
-//  Open Beam
+//  OpenBeam
 //
 //  AVCaptureSession setup and video frame delivery.
 //
@@ -64,7 +64,7 @@ final class CameraController: NSObject, @unchecked Sendable {
             ]
         }
         session.commitConfiguration()
-        print("[Open Beam] Camera pixel format: \(new.rawValue)")
+        print("[OpenBeam] Camera pixel format: \(new.rawValue)")
     }
 
     func start(deviceID: String? = nil) {
@@ -76,7 +76,7 @@ final class CameraController: NSObject, @unchecked Sendable {
         }
 
         guard let device else {
-            print("[Open Beam] No camera found")
+            print("[OpenBeam] No camera found")
             return
         }
 
@@ -97,7 +97,7 @@ final class CameraController: NSObject, @unchecked Sendable {
                 currentDeviceID = device.uniqueID
             }
         } catch {
-            print("[Open Beam] Camera input error: \(error)")
+            print("[OpenBeam] Camera input error: \(error)")
             session.commitConfiguration()
             return
         }
@@ -122,7 +122,7 @@ final class CameraController: NSObject, @unchecked Sendable {
             session.startRunning()
         }
 
-        print("[Open Beam] Camera started: \(device.localizedName)")
+        print("[OpenBeam] Camera started: \(device.localizedName)")
     }
 
     func switchCamera(deviceID: String) {

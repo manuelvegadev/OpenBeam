@@ -1,6 +1,6 @@
 //
 //  NDIRuntime.swift
-//  Open Beam
+//  OpenBeam
 //
 //  Shared ownership of the NDI library's process-wide init and teardown.
 //
@@ -23,7 +23,7 @@ enum NDIRuntime {
         users.withLock { count in
             if count == 0 {
                 guard NDIlib_initialize() else {
-                    print("[Open Beam] NDIlib_initialize failed")
+                    print("[OpenBeam] NDIlib_initialize failed")
                     return false
                 }
             }

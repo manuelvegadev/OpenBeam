@@ -1,6 +1,6 @@
 //
 //  ClipSyncPairing.swift
-//  Open Beam
+//  OpenBeam
 //
 //  KDE-Connect-style pairing UX. The connection-handshake math (verification
 //  code, fingerprint) lives in ClipSyncConnection; this file owns only the

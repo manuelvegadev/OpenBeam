@@ -1,6 +1,6 @@
 //
 //  NDIFinder.swift
-//  Open Beam
+//  OpenBeam
 //
 //  Discovery of NDI sources on the local network.
 //
@@ -29,7 +29,7 @@ final class NDIFinder: @unchecked Sendable {
             settings.p_extra_ips = nil
 
             guard let created = NDIlib_find_create_v2(&settings) else {
-                print("[Open Beam] NDIlib_find_create_v2 failed")
+                print("[OpenBeam] NDIlib_find_create_v2 failed")
                 NDIRuntime.release()
                 return
             }

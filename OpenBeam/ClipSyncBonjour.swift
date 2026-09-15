@@ -1,6 +1,6 @@
 //
 //  ClipSyncBonjour.swift
-//  Open Beam
+//  OpenBeam
 //
 //  mDNS service register + browse via the legacy `dns_sd.h` C API.
 //

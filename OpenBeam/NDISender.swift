@@ -1,6 +1,6 @@
 //
 //  NDISender.swift
-//  Open Beam
+//  OpenBeam
 //
 //  NDI SDK C API bridge and frame sending.
 //
@@ -20,7 +20,7 @@ final class NDISender: @unchecked Sendable {
         if !hostName.isEmpty {
             return hostName.hasSuffix(".local") ? String(hostName.dropLast(6)) : hostName
         }
-        return "Open Beam"
+        return "OpenBeam"
     }()
 
     private var ndiInstance: NDIlib_send_instance_t?
@@ -61,14 +61,14 @@ final class NDISender: @unchecked Sendable {
         }
 
         guard let instance else {
-            print("[Open Beam] NDIlib_send_create failed")
+            print("[OpenBeam] NDIlib_send_create failed")
             NDIRuntime.release()
             return false
         }
 
         queue.sync { ndiInstance = instance }
         liveInstance.withLock { $0 = instance }
-        print("[Open Beam] NDI sender started — source name: \(Self.sourceName)")
+        print("[OpenBeam] NDI sender started — source name: \(Self.sourceName)")
         return true
     }
 
@@ -195,7 +195,7 @@ final class NDISender: @unchecked Sendable {
                 NDIRuntime.release()
             }
         }
-        print("[Open Beam] NDI sender stopped")
+        print("[OpenBeam] NDI sender stopped")
     }
 
     deinit {

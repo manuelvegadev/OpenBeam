@@ -2,7 +2,7 @@
 
 A small LAN protocol for synchronizing clipboards (text and files) between two paired devices. Designed for trivial implementation on macOS (CryptoKit + Network.framework) and Linux (libsodium + Avahi). Inspired by KDE Connect but **not wire-compatible** with it.
 
-> **Source-of-truth rule.** This document is the canonical specification. Both the macOS implementation in Open Beam and the Linux companion app implement *against this file*. Whenever a decision affects what goes on the wire — packet shapes, crypto primitives, key derivation strings, limits, port numbers — update this file first, then update the implementations to match.
+> **Source-of-truth rule.** This document is the canonical specification. Both the macOS implementation in OpenBeam and the Linux companion app implement *against this file*. Whenever a decision affects what goes on the wire — packet shapes, crypto primitives, key derivation strings, limits, port numbers — update this file first, then update the implementations to match.
 
 ## Goals
 
