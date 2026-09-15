@@ -1,0 +1,97 @@
+name: Pages
+
+# Deploys the landing page, the docs and the Sparkle appcast as one site.
+#
+# This is called by release.yml rather than triggered by `on: release`, because
+# a release created with GITHUB_TOKEN does not trigger workflow runs — an
+# `on: release` deploy would simply never fire.
+on:
+  workflow_call:
+    inputs:
+      appcast-artifact:
+        description: >-
+          Name of an artifact from the calling run holding a freshly generated
+          appcast.xml. When absent, the published appcast is carried over
+          unchanged so a docs-only deploy cannot erase the update feed.
+        required: false
+        type: string
+  push:
+    branches: [main]
+    paths: ['site/**', '.github/workflows/pages.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            site/landing/package-lock.json
+            site/docs/package-lock.json
+
+      # The two sites share nothing, so the job should not pay for them in
+      # series — that is two installs and two builds on every deploy.
+      - name: Build the landing page and the docs
+        run: |
+          (cd site/landing && npm ci && npm run build) &
+          landing=$!
+          (cd site/docs && npm ci && npm run build) &
+          docs=$!
+          wait $landing
+          wait $docs
+
+      - name: Assemble the site
+        run: |
+          mkdir -p _site
+          cp -R site/landing/dist/. _site/
+          mkdir -p _site/docs
+          cp -R site/docs/dist/. _site/docs/
+
+      - name: Take the new appcast from the release
+        if: inputs.appcast-artifact != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.appcast-artifact }}
+          path: _site
+
+      - name: Carry over the published appcast
+        if: inputs.appcast-artifact == ''
+        run: |
+          # A docs-only deploy replaces the whole site, so the feed has to be
+          # fetched back from the live site or every installed copy would stop
+          # seeing updates. A 404 means there is genuinely no feed yet; any other
+          # failure must stop the deploy rather than silently publish an empty
+          # feed over a good one.
+          source scripts/lib.sh
+          code=$(curl -sS -o _site/appcast.xml -w '%{http_code}' "$SITE_URL/appcast.xml" || echo 000)
+          case "$code" in
+            200) echo "Carried over $(grep -c '<item>' _site/appcast.xml) appcast items" ;;
+            404) rm -f _site/appcast.xml; echo "No published appcast yet — nothing to carry over" ;;
+            *)   rm -f _site/appcast.xml
+                 echo "::error::could not read the published appcast (HTTP $code); refusing to deploy a site that would drop it"
+                 exit 1 ;;
+          esac
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deploy
+        uses: actions/deploy-pages@v4
