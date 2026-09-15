@@ -9,7 +9,7 @@
 
 APP_NAME="OpenBeam"
 REPO="manuelvegadev/OpenBeam"
-SITE_URL="https://manuelvegadev.github.io/OpenBeam"
+SITE_URL="https://openbeam.manuelvega.dev"
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT="$PROJECT_DIR/OpenBeam.xcodeproj"

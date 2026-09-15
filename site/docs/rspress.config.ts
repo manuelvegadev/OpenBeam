@@ -2,9 +2,9 @@ import { defineConfig } from 'rspress/config';
 
 export default defineConfig({
   root: 'docs',
-  // The site is served from a project page, so every asset and link is
-  // prefixed. The landing page sits at /OpenBeam/ and these docs below it.
-  base: '/OpenBeam/docs/',
+  // The landing page is the root of openbeam.manuelvega.dev; these docs sit
+  // below it.
+  base: '/docs/',
   outDir: 'dist',
   title: 'OpenBeam',
   description: 'Send a webcam over NDI, and turn NDI back into a webcam.',

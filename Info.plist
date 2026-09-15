@@ -51,7 +51,7 @@
 	  with a modal asking permission to check.
 	-->
 	<key>SUFeedURL</key>
-	<string>https://manuelvegadev.github.io/OpenBeam/appcast.xml</string>
+	<string>https://openbeam.manuelvega.dev/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>ZIQHHuPLgUqhNPtmWJOQKMI5Wz7vtSdbpxyRTMGan1M=</string>
 	<key>SUEnableAutomaticChecks</key>

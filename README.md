@@ -52,7 +52,7 @@ OpenBeam is signed, but not with a paid Apple Developer certificate, so the firs
 
 > No NDI SDK installation needed — `libndi.dylib` is bundled inside the app.
 
-Full documentation is at **[manuelvegadev.github.io/OpenBeam](https://manuelvegadev.github.io/OpenBeam/)**.
+Full documentation is at **[openbeam.manuelvega.dev](https://openbeam.manuelvega.dev)**.
 
 ## Settings
 
