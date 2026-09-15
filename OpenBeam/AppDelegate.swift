@@ -1,6 +1,6 @@
 //
 //  AppDelegate.swift
-//  Open Beam
+//  OpenBeam
 //
 //  NSStatusItem tray icon and menu — app entry point.
 //
@@ -57,12 +57,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let clipSyncManager = ClipSyncManager()
     private let netMonitor = NetTrafficMonitor()
 
+    // Settings and updates. The updater is a stored property because Sparkle's
+    // controller stops the moment it is deallocated.
+    private let launchAtLogin = LaunchAtLogin()
+    private var updaterController: UpdaterController!
+    // Built the first time the settings window is opened. Constructing the
+    // model costs an SMAppService round-trip and a pass over every controller,
+    // which most launches never need.
+    private var settingsModel: SettingsModel?
+    private var settingsWindow: SettingsWindowController?
+    /// Shown at the top of the menu when a background check found an update we
+    /// deliberately did not interrupt the user with.
+    private var updateAvailableItem: NSMenuItem!
+    private var checkForUpdatesItem: NSMenuItem!
+
     /// Which half of the host/client pair this machine plays. The two are
     /// exclusive: receiving takes the camera, the microphone and our own NDI
     /// source down, so one machine never sends and receives at the same time.
     private enum AppMode: String { case send, receive }
 
     private static let modeDefaultsKey = "mode"
+
+    static var appVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
+    }
+
+    /// The project's home. The menu's GitHub button and the About pane's links
+    /// both derive from this, so a rename cannot leave one of them behind.
+    static let repoURL = URL(string: "https://github.com/manuelvegadev/OpenBeam")!
     private static let ndiSourceDefaultsKey = "ndiSource"
 
     /// Held in a lock because the capture and audio threads read it on every
@@ -104,7 +126,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var cameraSubmenu: NSMenu!
     private var audioSubmenu: NSMenu!
-    private var clipboardSubmenu: NSMenu!
     private var ndiSourceSubmenu: NSMenu!
     private var statsSubmenu: NSMenu!
 
@@ -126,7 +147,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statsDataRateItem: NSMenuItem!
     private var statsFramesSentItem: NSMenuItem!
     private var statsDroppedItem: NSMenuItem!
-    private var pixelFormatToggleItem: NSMenuItem!
     private var prevFramesSent: Int64 = 0
     private var prevBytesSent: Int64 = 0
     private var prevStatsTime: CFAbsoluteTime = 0
@@ -154,9 +174,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         buildStatusItem()
         configurePipeline()
         apply(mode: saved)
+        // After the status item, so that if Sparkle's updater fails to start —
+        // it reports that with a modal alert a second later — the app is not a
+        // lone dialog with nothing behind it.
+        updaterController = UpdaterController()
+        updaterController.onQuietUpdateStateChanged = { [weak self] pending in
+            self?.updateAvailableItem.isHidden = !pending
+        }
+        checkForUpdatesItem.target = updaterController.menuTarget
+        checkForUpdatesItem.action = updaterController.menuAction
+
+        // An update replaces the bundle and so its ad-hoc signature, which macOS
+        // may take as reason to drop the login item. Put it back if the user
+        // asked for it — off the main thread, because both the status read and
+        // the re-registration are synchronous XPC to the login-item daemon and
+        // nothing on screen is waiting for them.
+        DispatchQueue.global(qos: .utility).async { [launchAtLogin] in
+            launchAtLogin.reconcile()
+        }
+
+        MainMenu.install(settingsTarget: self, settingsAction: #selector(openSettings(_:)))
+
+        // ClipSync announces every discovery, pair and unpair. The settings
+        // mirror only matters while someone is looking at it, so an app that has
+        // never opened the window does no work here at all.
         clipSyncManager.onStateChanged = { [weak self] in
-            // No persistent submenu items to mutate eagerly; the menu rebuilds on open.
-            _ = self
+            DispatchQueue.main.async {
+                guard let self, self.settingsWindow?.isVisible == true else { return }
+                self.settingsModel?.refresh()
+            }
         }
         clipSyncManager.onPairRequestPresented = { [weak self] in
             self?.statusItem.menu?.cancelTracking()
@@ -187,20 +233,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 button.image = icon
             } else {
                 button.image = NSImage(systemSymbolName: "camera.fill",
-                                       accessibilityDescription: "Open Beam")
+                                       accessibilityDescription: "OpenBeam")
             }
-            button.setAccessibilityLabel("Open Beam")
+            button.setAccessibilityLabel("OpenBeam")
         }
 
         let menu = NSMenu()
         menu.delegate = self
 
+        // --- Update notice ---
+        // A background check that found something does not interrupt the user
+        // (see `UpdaterController`); this is where they find out instead. Hidden
+        // until there is something to say.
+        updateAvailableItem = NSMenuItem(title: "Update available — Install…",
+                                         action: #selector(installAvailableUpdate(_:)),
+                                         keyEquivalent: "")
+        updateAvailableItem.target = self
+        updateAvailableItem.isHidden = true
+        menu.addItem(updateAvailableItem)
+
         // --- Header bar ---
         let headerView = MenuRowView(frame: NSRect(x: 0, y: 0, width: Self.baseWidth, height: 30))
 
-        let titleLabel = NSTextField(labelWithString: "Open Beam")
-        titleLabel.font = .boldSystemFont(ofSize: 13)
-        titleLabel.textColor = .labelColor
+        // The version sits beside the name so a bug report can name the exact
+        // build without anyone having to go looking for it.
+        let title = NSMutableAttributedString(
+            string: "OpenBeam",
+            attributes: [.font: NSFont.boldSystemFont(ofSize: 13),
+                         .foregroundColor: NSColor.labelColor])
+        title.append(NSAttributedString(
+            string: "  \(Self.appVersion)",
+            attributes: [.font: NSFont.systemFont(ofSize: 11),
+                         .foregroundColor: NSColor.secondaryLabelColor]))
+
+        let titleLabel = NSTextField(labelWithAttributedString: title)
         titleLabel.sizeToFit()
         titleLabel.frame.origin = NSPoint(x: Self.contentInsetX, y: (30 - titleLabel.frame.height) / 2)
         headerView.addSubview(titleLabel)
@@ -327,13 +393,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         virtualCameraItem.target = self
         add(virtualCameraItem, to: menu, visibleIn: .receive)
 
-        // --- Clipboard sync submenu ---
-        let clipboardItem = NSMenuItem(title: "Clipboard Sync", action: nil, keyEquivalent: "")
-        clipboardSubmenu = NSMenu()
-        clipboardSubmenu.delegate = self
-        clipboardItem.submenu = clipboardSubmenu
-        menu.addItem(clipboardItem)
-
         // An ordinary member of the send-only block: hiding it with the block
         // is what stops Receive showing two separators in a row.
         add(.separator(), to: menu, visibleIn: .send)
@@ -348,13 +407,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                     keyEquivalent: "")
         restartNDI.target = self
         add(restartNDI, to: menu, visibleIn: .send)
-
-        pixelFormatToggleItem = NSMenuItem(title: "Send as UYVY (4:2:2)",
-                                           action: #selector(togglePixelFormat(_:)),
-                                           keyEquivalent: "")
-        pixelFormatToggleItem.target = self
-        pixelFormatToggleItem.state = (cameraController.pixelFormat == .uyvy422) ? .on : .off
-        add(pixelFormatToggleItem, to: menu, visibleIn: .send)
 
         menu.addItem(.separator())
 
@@ -373,8 +425,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
+        // --- Settings and updates ---
+        // The key equivalent is cosmetic: it only fires while this menu is open,
+        // since a status item menu is not in a window's responder chain. The one
+        // that works anywhere is in `MainMenu`.
+        let settingsItem = NSMenuItem(title: "Settings…",
+                                      action: #selector(openSettings(_:)),
+                                      keyEquivalent: ",")
+        settingsItem.target = self
+        menu.addItem(settingsItem)
+
+        // Target and action are set once the updater exists; Sparkle's own
+        // controller validates the item, so it greys itself out mid-session.
+        checkForUpdatesItem = NSMenuItem(title: "Check for Updates…", action: nil, keyEquivalent: "")
+        menu.addItem(checkForUpdatesItem)
+
+        menu.addItem(.separator())
+
         // --- Quit ---
-        let quitItem = NSMenuItem(title: "Quit Open Beam",
+        let quitItem = NSMenuItem(title: "Quit OpenBeam",
                                   action: #selector(NSApplication.terminate(_:)),
                                   keyEquivalent: "q")
         menu.addItem(quitItem)
@@ -629,7 +698,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard mode == .send else { return }
         if !ndiSender.isActive {
             if !ndiSender.start() {
-                print("[Open Beam] NDI unavailable")
+                print("[OpenBeam] NDI unavailable")
             }
         }
     }
@@ -889,8 +958,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Actions
 
+    @MainActor
+    @objc private func openSettings(_ sender: Any) {
+        if settingsWindow == nil {
+            let model = SettingsModel(camera: cameraController,
+                                      clipSync: clipSyncManager,
+                                      updater: updaterController,
+                                      launchAtLogin: launchAtLogin)
+            settingsModel = model
+            settingsWindow = SettingsWindowController(model: model)
+        }
+        settingsWindow?.show()
+    }
+
+    /// Brings up the update Sparkle already found in the background. Asking it
+    /// to check again is what re-presents that update — it is still in hand, so
+    /// nothing is downloaded twice.
+    @MainActor
+    @objc private func installAvailableUpdate(_ sender: Any) {
+        updaterController.checkForUpdates()
+    }
+
     @objc private func openGitHub(_ sender: Any) {
-        NSWorkspace.shared.open(URL(string: "https://github.com/manuelvegadev/OpenBeam")!)
+        NSWorkspace.shared.open(Self.repoURL)
     }
 
     @objc private func modeChanged(_ sender: NSSegmentedControl) {
@@ -912,12 +1002,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ = ndiSender.restart()
     }
 
-    @objc private func togglePixelFormat(_ sender: NSMenuItem) {
-        let new: CameraPixelFormat = (cameraController.pixelFormat == .uyvy422) ? .bgra32 : .uyvy422
-        cameraController.setPixelFormat(new)
-        sender.state = (new == .uyvy422) ? .on : .off
-    }
-
     @objc private func selectCamera(_ sender: NSMenuItem) {
         guard let deviceID = sender.representedObject as? String else { return }
         cameraController.switchCamera(deviceID: deviceID)
@@ -932,29 +1016,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             micSelection = .off
             audioController.stop()
-        }
-    }
-
-    @objc private func toggleClipboardSync(_ sender: NSMenuItem) {
-        clipSyncManager.isEnabled.toggle()
-    }
-
-    @objc private func requestClipSyncPair(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? String,
-              let peer = clipSyncManager.discoveredPeers.first(where: { $0.peerID == id }) else { return }
-        clipSyncManager.requestPair(with: peer)
-    }
-
-    @objc private func unpairClipSync(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? String,
-              let peer = clipSyncManager.pairedPeers.first(where: { $0.peerID == id }) else { return }
-        let alert = NSAlert()
-        alert.messageText = "Forget \"\(peer.displayName)\"?"
-        alert.informativeText = "You'll need to pair again to resume clipboard sync."
-        alert.addButton(withTitle: "Cancel")
-        alert.addButton(withTitle: "Forget")
-        if alert.runModal() == .alertSecondButtonReturn {
-            clipSyncManager.unpair(peerID: id)
         }
     }
 }
@@ -997,7 +1058,6 @@ extension AppDelegate: NSMenuDelegate {
         netMonitor.start()
         resetStatsDisplay()
         startStatsTimer()
-        pixelFormatToggleItem.state = (cameraController.pixelFormat == .uyvy422) ? .on : .off
 
         if mode == .receive { refreshVirtualCamera() }
         syncReceiveSession()
@@ -1010,71 +1070,8 @@ extension AppDelegate: NSMenuDelegate {
             updateCameraSubmenu(menu)
         } else if menu === audioSubmenu {
             updateAudioSubmenu(menu)
-        } else if menu === clipboardSubmenu {
-            updateClipboardSubmenu(menu)
         } else if menu === ndiSourceSubmenu {
             updateNDISourceSubmenu(menu)
-        }
-    }
-
-    private func updateClipboardSubmenu(_ menu: NSMenu) {
-        menu.removeAllItems()
-
-        // --- Enabled toggle ---
-        let toggle = NSMenuItem(title: "Enabled",
-                                action: #selector(toggleClipboardSync(_:)),
-                                keyEquivalent: "")
-        toggle.target = self
-        toggle.state = clipSyncManager.isEnabled ? .on : .off
-        menu.addItem(toggle)
-
-        menu.addItem(.separator())
-
-        // --- Discovered (unpaired) ---
-        let discoveredHeader = NSMenuItem(title: "Discovered", action: nil, keyEquivalent: "")
-        discoveredHeader.isEnabled = false
-        menu.addItem(discoveredHeader)
-
-        let pairedIDs = Set(clipSyncManager.pairedPeers.map(\.peerID))
-        let unpairedDiscovered = clipSyncManager.discoveredPeers.filter { !pairedIDs.contains($0.peerID) }
-
-        if unpairedDiscovered.isEmpty {
-            let placeholder = NSMenuItem(title: "    No devices found", action: nil, keyEquivalent: "")
-            placeholder.isEnabled = false
-            menu.addItem(placeholder)
-        } else {
-            for peer in unpairedDiscovered {
-                let title = "    \(peer.displayName) (\(peer.os))"
-                let item = NSMenuItem(title: title,
-                                      action: #selector(requestClipSyncPair(_:)),
-                                      keyEquivalent: "")
-                item.target = self
-                item.representedObject = peer.peerID
-                menu.addItem(item)
-            }
-        }
-
-        menu.addItem(.separator())
-
-        // --- Paired ---
-        let pairedHeader = NSMenuItem(title: "Paired", action: nil, keyEquivalent: "")
-        pairedHeader.isEnabled = false
-        menu.addItem(pairedHeader)
-
-        if clipSyncManager.pairedPeers.isEmpty {
-            let placeholder = NSMenuItem(title: "    No paired devices", action: nil, keyEquivalent: "")
-            placeholder.isEnabled = false
-            menu.addItem(placeholder)
-        } else {
-            for peer in clipSyncManager.pairedPeers.sorted(by: { $0.displayName < $1.displayName }) {
-                let title = "    \(peer.displayName) (\(peer.os)) — Forget"
-                let item = NSMenuItem(title: title,
-                                      action: #selector(unpairClipSync(_:)),
-                                      keyEquivalent: "")
-                item.target = self
-                item.representedObject = peer.peerID
-                menu.addItem(item)
-            }
         }
     }
 

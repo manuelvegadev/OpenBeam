@@ -13,26 +13,51 @@
 	<key>CFBundleName</key>
 	<string>$(PRODUCT_NAME)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Open Beam</string>
+	<string>OpenBeam</string>
 	<key>CFBundlePackageType</key>
 	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
 	<key>CFBundleShortVersionString</key>
 	<string>$(MARKETING_VERSION)</string>
+	<!--
+	  Sparkle compares CFBundleVersion to decide what is newer, and
+	  CURRENT_PROJECT_VERSION has never been bumped. Deriving it from
+	  MARKETING_VERSION — the one release.sh already bumps everywhere — makes
+	  the two structurally incapable of drifting apart.
+	-->
 	<key>CFBundleVersion</key>
-	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<string>$(MARKETING_VERSION)</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>Open Beam needs camera access to capture and broadcast video over NDI.</string>
+	<string>OpenBeam needs camera access to capture and broadcast video over NDI.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Open Beam needs microphone access to capture and broadcast audio over NDI.</string>
+	<string>OpenBeam needs microphone access to capture and broadcast audio over NDI.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Open Beam uses the local network to broadcast NDI video to other devices and to synchronize the clipboard with paired devices.</string>
+	<string>OpenBeam uses the local network to broadcast NDI video to other devices and to synchronize the clipboard with paired devices.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_ndi._tcp</string>
 		<string>_clipsync._tcp</string>
 	</array>
+	<!--
+	  Sparkle. The app is ad-hoc signed and not notarized, so Sparkle's
+	  code-signature check can never pass across an update — its designated
+	  requirement pins a per-binary cdhash. SUPublicEDKey is therefore the only
+	  thing standing between a user and a hostile update: never ship without it,
+	  and never lose the private half. A key Sparkle cannot use is not a soft
+	  failure — the updater refuses to start and says so in a modal on every
+	  launch — which is why build-dmg.sh refuses to build with the placeholder.
+	  SUEnableAutomaticChecks is set so a menu bar app does not open its life
+	  with a modal asking permission to check.
+	-->
+	<key>SUFeedURL</key>
+	<string>https://manuelvegadev.github.io/OpenBeam/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>ZIQHHuPLgUqhNPtmWJOQKMI5Wz7vtSdbpxyRTMGan1M=</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUScheduledCheckInterval</key>
+	<integer>86400</integer>
 	<key>NSHumanReadableCopyright</key>
 	<string></string>
 	<!--
