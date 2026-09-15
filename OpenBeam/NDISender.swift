@@ -49,10 +49,7 @@ final class NDISender: @unchecked Sendable {
     var isActive: Bool { liveInstance.withLock { $0 != nil } }
 
     func start() -> Bool {
-        guard NDIlib_initialize() else {
-            print("[Open Beam] NDIlib_initialize failed")
-            return false
-        }
+        guard NDIRuntime.retain() else { return false }
 
         let instance: NDIlib_send_instance_t? = Self.sourceName.withCString { namePtr in
             var settings = NDIlib_send_create_t()
@@ -65,7 +62,7 @@ final class NDISender: @unchecked Sendable {
 
         guard let instance else {
             print("[Open Beam] NDIlib_send_create failed")
-            NDIlib_destroy()
+            NDIRuntime.release()
             return false
         }
 
@@ -195,8 +192,8 @@ final class NDISender: @unchecked Sendable {
                 NDIlib_send_send_video_v2(instance, nil)
                 NDIlib_send_destroy(instance)
                 ndiInstance = nil
+                NDIRuntime.release()
             }
-            NDIlib_destroy()
         }
         print("[Open Beam] NDI sender stopped")
     }

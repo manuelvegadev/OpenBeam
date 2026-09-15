@@ -10,6 +10,33 @@ import AVFoundation
 import CoreImage
 import os
 
+/// A menu item view that lays its contents out from its own width.
+///
+/// AppKit stretches item views to the menu's width, and the menu is as wide as
+/// its longest text item — so a hardcoded layout leaves the preview and the
+/// tabs short of the right edge as soon as a source name is long.
+private final class MenuRowView: NSView {
+
+    var layoutHandler: ((NSRect) -> Void)?
+    /// Set by rows whose height follows their width — only the preview, which
+    /// keeps 16:9. Rows without one keep the height they were built with.
+    var heightForWidth: ((CGFloat) -> CGFloat)?
+
+    /// Resizes to `width`, applying the row's own height rule, and lays out.
+    func fit(to width: CGFloat) {
+        setFrameSize(NSSize(width: width, height: heightForWidth?(width) ?? frame.height))
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        // Layer frames set here would otherwise animate into place.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layoutHandler?(bounds)
+        CATransaction.commit()
+    }
+}
+
 @main
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
@@ -25,12 +52,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let cameraController = CameraController()
     private let audioController = AudioController()
     private let ndiSender = NDISender()
+    private let ndiFinder = NDIFinder()
+    private let ndiReceiver = NDIReceiver()
     private let clipSyncManager = ClipSyncManager()
     private let netMonitor = NetTrafficMonitor()
+
+    /// Which half of the host/client pair this machine plays. The two are
+    /// exclusive: receiving takes the camera, the microphone and our own NDI
+    /// source down, so one machine never sends and receives at the same time.
+    private enum AppMode: String { case send, receive }
+
+    private static let modeDefaultsKey = "mode"
+    private static let ndiSourceDefaultsKey = "ndiSource"
+
+    /// Held in a lock because the capture and audio threads read it on every
+    /// frame — `ensureNDIStarted` must not revive the sender just after Receive
+    /// took our source off the network.
+    private let modeState = OSAllocatedUnfairLock(initialState: AppMode.send)
+    private var mode: AppMode { modeState.withLock { $0 } }
+    private var modeControl: NSSegmentedControl!
+    /// Items only one mode shows, recorded as each is built.
+    private var itemVisibility: [(item: NSMenuItem, mode: AppMode)] = []
+    private var virtualCameraItem: NSMenuItem!
+    /// The width every row starts from; the menu grows past it only when a text
+    /// item needs more, and the rows then follow.
+    private static let baseWidth: CGFloat = 336
+    /// Horizontal inset shared by the preview, the meter, the tabs and the
+    /// title. 14 pt is where AppKit itself starts an item's text and draws the
+    /// separators, measured off a screenshot: anything else reads as misaligned
+    /// against the rows the system draws.
+    private static let contentInsetX: CGFloat = 14
+    /// Vertical padding around the preview and the meter.
+    private static let contentInsetY: CGFloat = 8
+    /// The widest the menu is allowed to get. Past this a source name is
+    /// trimmed rather than stretching the menu across the screen.
+    private static let maxWidth: CGFloat = 460
+    private var menuRows: [MenuRowView] = []
+    /// Reading `menu.size` below re-enters `menuNeedsUpdate`; without this the
+    /// row resizing would recurse.
+    private var syncingMenuWidth = false
+
+    /// The microphone the user picked, kept because `AudioController.stop()`
+    /// forgets its device across a trip through Receive. One value rather than
+    /// a flag beside an id, so "off with a device remembered" cannot happen.
+    private enum MicSelection { case system, off, device(String) }
+    private var micSelection: MicSelection = .system
+
+    /// Last read of the virtual camera, refreshed on menu opens and on the
+    /// stats tick. Cached because every read walks the CoreMediaIO device list.
+    private var virtualCamera = VirtualCamera.Status()
 
     private var cameraSubmenu: NSMenu!
     private var audioSubmenu: NSMenu!
     private var clipboardSubmenu: NSMenu!
+    private var ndiSourceSubmenu: NSMenu!
     private var statsSubmenu: NSMenu!
 
     private var meterTrackLayer: CALayer!
@@ -74,8 +149,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - App Lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let saved = AppMode(rawValue: UserDefaults.standard.string(forKey: Self.modeDefaultsKey) ?? "") ?? .send
+        modeState.withLock { $0 = saved }
         buildStatusItem()
-        startPipeline()
+        configurePipeline()
+        apply(mode: saved)
         clipSyncManager.onStateChanged = { [weak self] in
             // No persistent submenu items to mutate eagerly; the menu rebuilds on open.
             _ = self
@@ -92,6 +170,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         cameraController.stop()
         audioController.stop()
         ndiSender.stop()
+        ndiReceiver.stop()
+        ndiFinder.stop()
         clipSyncManager.stop()
         netMonitor.stop()
     }
@@ -116,37 +196,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.delegate = self
 
         // --- Header bar ---
-        let headerItem = NSMenuItem()
-        let headerView = NSView(frame: NSRect(x: 0, y: 0, width: 336, height: 30))
+        let headerView = MenuRowView(frame: NSRect(x: 0, y: 0, width: Self.baseWidth, height: 30))
 
         let titleLabel = NSTextField(labelWithString: "Open Beam")
         titleLabel.font = .boldSystemFont(ofSize: 13)
         titleLabel.textColor = .labelColor
         titleLabel.sizeToFit()
-        titleLabel.frame.origin = NSPoint(x: 14, y: (30 - titleLabel.frame.height) / 2)
+        titleLabel.frame.origin = NSPoint(x: Self.contentInsetX, y: (30 - titleLabel.frame.height) / 2)
         headerView.addSubview(titleLabel)
 
-        let ghButton = NSButton(frame: NSRect(x: 336 - 14 - 20, y: (30 - 20) / 2, width: 20, height: 20))
+        let ghSize: CGFloat = 16
+        let ghButton = NSButton(frame: NSRect(x: Self.baseWidth - Self.contentInsetX - ghSize,
+                                              y: (30 - ghSize) / 2, width: ghSize, height: ghSize))
         ghButton.bezelStyle = .inline
         ghButton.isBordered = false
         if let img = NSImage(named: "GitHubMark") {
-            img.size = NSSize(width: 16, height: 16)
+            img.size = NSSize(width: ghSize, height: ghSize)
             ghButton.image = img
         }
         ghButton.target = self
         ghButton.action = #selector(openGitHub(_:))
         headerView.addSubview(ghButton)
 
-        headerItem.view = headerView
-        menu.addItem(headerItem)
+        headerView.layoutHandler = { bounds in
+            ghButton.frame.origin.x = bounds.width - Self.contentInsetX - ghButton.frame.width
+        }
+        addRow(headerView, to: menu)
+
+        // --- Mode tabs ---
+        // A custom view rather than two menu items: clicking a menu item closes
+        // the menu, and switching modes with the preview in sight is the point.
+        let modeView = MenuRowView(frame: NSRect(x: 0, y: 0, width: Self.baseWidth, height: 32))
+        let tabs = NSSegmentedControl(labels: ["Send", "Receive"],
+                                      trackingMode: .selectOne,
+                                      target: self,
+                                      action: #selector(modeChanged(_:)))
+        tabs.segmentDistribution = .fillEqually
+        // A segmented control draws its bezel inside its frame — AppKit reports
+        // how far in — so the frame is widened by that much to put the *bezel*
+        // on the same inset as the preview and the meter.
+        let bezel = tabs.alignmentRectInsets
+        tabs.frame.origin = NSPoint(x: Self.contentInsetX - bezel.left, y: 3)
+        tabs.frame.size.height = 26
+        tabs.selectedSegment = (mode == .send) ? 0 : 1
+        modeControl = tabs
+        modeView.addSubview(tabs)
+        modeView.layoutHandler = { bounds in
+            tabs.frame.size.width = bounds.width - 2 * Self.contentInsetX + bezel.left + bezel.right
+        }
+        addRow(modeView, to: menu)
 
         // --- Live preview ---
-        let previewItem = NSMenuItem()
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 336, height: 196))
+        let container = MenuRowView(frame: NSRect(x: 0, y: 0, width: Self.baseWidth, height: 0))
         container.wantsLayer = true
+        container.heightForWidth = Self.previewRowHeight(for:)
 
         previewLayer = CALayer()
-        previewLayer.frame = CGRect(x: 8, y: 8, width: 320, height: 180)
         // No background: an empty preview shows the menu's own vibrant
         // material through it rather than a black slab.
         previewLayer.backgroundColor = nil
@@ -156,21 +261,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         previewLayer.actions = ["contents": NSNull()]
         container.layer?.addSublayer(previewLayer)
 
-        previewItem.view = container
-        menu.addItem(previewItem)
+        container.layoutHandler = { [weak self] bounds in
+            self?.previewLayer?.frame = bounds.insetBy(dx: Self.contentInsetX, dy: Self.contentInsetY)
+        }
+        addRow(container, to: menu)
 
         // --- Audio level meter ---
-        let meterItem = NSMenuItem()
         let meterHeight: CGFloat = 8
-        let meterWidth: CGFloat = 320
         let containerHeight: CGFloat = 18
-        let meterContainer = NSView(frame: NSRect(x: 0, y: 0, width: 336, height: containerHeight))
+        let meterContainer = MenuRowView(frame: NSRect(x: 0, y: 0, width: Self.baseWidth, height: containerHeight))
         meterContainer.wantsLayer = true
 
         let meterY = (containerHeight - meterHeight) / 2
 
         meterTrackLayer = CALayer()
-        meterTrackLayer.frame = CGRect(x: 8, y: meterY, width: meterWidth, height: meterHeight)
+        meterTrackLayer.frame = CGRect(x: Self.contentInsetX, y: meterY, width: 0, height: meterHeight)
         meterTrackLayer.backgroundColor = NSColor.white.withAlphaComponent(0.12).cgColor
         meterTrackLayer.cornerRadius = meterHeight / 2
         meterTrackLayer.cornerCurve = .continuous
@@ -186,8 +291,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         meterContainer.layer?.addSublayer(meterTrackLayer)
 
-        meterItem.view = meterContainer
-        menu.addItem(meterItem)
+        meterContainer.layoutHandler = { [weak self] bounds in
+            guard let self, let track = self.meterTrackLayer else { return }
+            track.frame.size.width = bounds.width - 2 * Self.contentInsetX
+            // The fill is a fraction of the track, redrawn on the next tick.
+            self.meterFillLayer.frame.size.width = min(self.meterFillLayer.frame.width, track.frame.width)
+        }
+        addRow(meterContainer, to: menu)
 
         menu.addItem(.separator())
 
@@ -196,14 +306,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         cameraSubmenu = NSMenu()
         cameraSubmenu.delegate = self
         cameraItem.submenu = cameraSubmenu
-        menu.addItem(cameraItem)
+        add(cameraItem, to: menu, visibleIn: .send)
 
         // --- Microphone selection submenu ---
         let audioItem = NSMenuItem(title: "Microphone", action: nil, keyEquivalent: "")
         audioSubmenu = NSMenu()
         audioSubmenu.delegate = self
         audioItem.submenu = audioSubmenu
-        menu.addItem(audioItem)
+        add(audioItem, to: menu, visibleIn: .send)
+
+        // --- NDI source selection (Receive) ---
+        let sourceItem = NSMenuItem(title: "NDI Source", action: nil, keyEquivalent: "")
+        ndiSourceSubmenu = NSMenu()
+        ndiSourceSubmenu.delegate = self
+        sourceItem.submenu = ndiSourceSubmenu
+        add(sourceItem, to: menu, visibleIn: .receive)
+
+        // --- Virtual camera status (Receive) ---
+        virtualCameraItem = NSMenuItem(title: "Virtual camera", action: nil, keyEquivalent: "")
+        virtualCameraItem.target = self
+        add(virtualCameraItem, to: menu, visibleIn: .receive)
 
         // --- Clipboard sync submenu ---
         let clipboardItem = NSMenuItem(title: "Clipboard Sync", action: nil, keyEquivalent: "")
@@ -212,25 +334,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         clipboardItem.submenu = clipboardSubmenu
         menu.addItem(clipboardItem)
 
-        menu.addItem(.separator())
+        // An ordinary member of the send-only block: hiding it with the block
+        // is what stops Receive showing two separators in a row.
+        add(.separator(), to: menu, visibleIn: .send)
 
         // --- NDI source label + restart ---
         let ndiLabel = NSMenuItem(title: "NDI: \(NDISender.sourceName)", action: nil, keyEquivalent: "")
         ndiLabel.isEnabled = false
-        menu.addItem(ndiLabel)
+        add(ndiLabel, to: menu, visibleIn: .send)
 
         let restartNDI = NSMenuItem(title: "Restart NDI",
                                     action: #selector(restartNDISender(_:)),
                                     keyEquivalent: "")
         restartNDI.target = self
-        menu.addItem(restartNDI)
+        add(restartNDI, to: menu, visibleIn: .send)
 
         pixelFormatToggleItem = NSMenuItem(title: "Send as UYVY (4:2:2)",
                                            action: #selector(togglePixelFormat(_:)),
                                            keyEquivalent: "")
         pixelFormatToggleItem.target = self
         pixelFormatToggleItem.state = (cameraController.pixelFormat == .uyvy422) ? .on : .off
-        menu.addItem(pixelFormatToggleItem)
+        add(pixelFormatToggleItem, to: menu, visibleIn: .send)
 
         menu.addItem(.separator())
 
@@ -258,6 +382,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = menu
     }
 
+    /// Adds an item only one mode shows, stating that where the item is built
+    /// instead of in a list at the other end of the builder.
+    private func add(_ item: NSMenuItem, to menu: NSMenu, visibleIn mode: AppMode) {
+        menu.addItem(item)
+        itemVisibility.append((item, mode))
+    }
+
+    /// Adds a row whose contents are laid out from its own width, applying the
+    /// layout once so the geometry is spelled in the handler and nowhere else.
+    private func addRow(_ row: MenuRowView, to menu: NSMenu) {
+        let item = NSMenuItem()
+        item.view = row
+        row.fit(to: Self.baseWidth)
+        menuRows.append(row)
+        menu.addItem(item)
+    }
+
     private func addDisabledItem(to menu: NSMenu, title: String) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         item.isEnabled = false
@@ -267,47 +408,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Pipeline
 
-    private func startPipeline() {
+    /// Wires the three frame sources to their sinks. Nothing is started here —
+    /// `apply(mode:)` decides which half of the pipeline runs.
+    private func configurePipeline() {
         cameraController.onFrame = { [weak self] pixelBuffer in
             guard let self else { return }
 
             self.ensureNDIStarted()
-
-            let w = CVPixelBufferGetWidth(pixelBuffer)
-            let h = CVPixelBufferGetHeight(pixelBuffer)
-            self.statsLock.withLock {
-                $0.width = w
-                $0.height = h
-                $0.count += 1
-            }
-
+            self.record(width: CVPixelBufferGetWidth(pixelBuffer),
+                        height: CVPixelBufferGetHeight(pixelBuffer))
             self.ndiSender.send(pixelBuffer: pixelBuffer)
 
-            // Render the preview only while the menu is visible, and not while
-            // the intro animation owns the layer — building the image first and
-            // discarding it on the main thread wasted a full-resolution copy per
-            // frame for the whole intro.
-            guard self.menuIsOpen, self.previewIntro != .running else { return }
-
-            guard let cgImage = Self.createCGImage(from: pixelBuffer) else { return }
-
-            if self.previewIntro == .pending {
-                // Built here rather than on the main thread: the menu is opening
-                // and its own animation is running there. A second frame can
-                // reach this before the state flips, which only costs one extra
-                // ladder — the main thread keeps whichever arrives first.
-                let ladder = Self.previewIntroLadder(from: cgImage)
-                DispatchQueue.main.async {
-                    guard self.previewIntro == .pending else { return }
-                    self.previewIntro = .running
-                    self.runPreviewIntro(ladder: ladder)
-                }
-                return
-            }
-
-            DispatchQueue.main.async {
-                self.previewLayer?.contents = cgImage
-            }
+            // Built only when it will be shown: this is a full-resolution copy.
+            guard self.wantsPreviewFrames, let image = Self.createCGImage(from: pixelBuffer) else { return }
+            self.present(image)
         }
 
         audioController.onAudio = { [weak self] buffer in
@@ -316,11 +430,203 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.ndiSender.send(audioBuffer: buffer)
         }
 
-        cameraController.start()
-        audioController.start()
+        // In Receive the frames come off the network instead, at proxy
+        // resolution: the full-resolution stream is the extension's business.
+        ndiReceiver.onFrame = { [weak self] image in
+            guard let self else { return }
+
+            self.record(width: image.width, height: image.height)
+            self.present(image)
+        }
+    }
+
+    /// The frame counters behind the resolution and fps lines, written by
+    /// whichever pipeline is running.
+    private func record(width: Int, height: Int) {
+        statsLock.withLock {
+            $0.width = width
+            $0.height = height
+            $0.count += 1
+        }
+    }
+
+    /// False when building a preview image would be thrown away — the menu is
+    /// closed, or the intro animation owns the layer.
+    private var wantsPreviewFrames: Bool { menuIsOpen && previewIntro != .running }
+
+    /// Puts a frame on the preview layer. Called from the capture and receive
+    /// threads; the layer itself is only ever touched on the main one.
+    private func present(_ cgImage: CGImage) {
+        guard wantsPreviewFrames else { return }
+
+        if previewIntro == .pending {
+            // Built here rather than on the main thread: the menu is opening
+            // and its own animation is running there. A second frame can reach
+            // this before the state flips, which only costs one extra ladder —
+            // the main thread keeps whichever arrives first.
+            let ladder = Self.previewIntroLadder(from: cgImage)
+            DispatchQueue.main.async {
+                guard self.previewIntro == .pending else { return }
+                self.previewIntro = .running
+                self.runPreviewIntro(ladder: ladder)
+            }
+            return
+        }
+
+        DispatchQueue.main.async {
+            self.previewLayer?.contents = cgImage
+        }
+    }
+
+    // MARK: - Mode
+
+    /// The one place a mode change happens. Send and Receive are exclusive, so
+    /// each side is fully torn down before the other starts.
+    private func apply(mode newMode: AppMode) {
+        modeState.withLock { $0 = newMode }
+        UserDefaults.standard.set(newMode.rawValue, forKey: Self.modeDefaultsKey)
+        modeControl?.selectedSegment = (newMode == .send) ? 0 : 1
+
+        for (item, visibility) in itemVisibility { item.isHidden = visibility != newMode }
+
+        // The counters describe one pipeline or the other, never a mix.
+        statsLock.withLock { $0 = (0, 0, 0) }
+        prevCaptureFrameCount = 0
+        ndiReceiver.resetStats()
+        ndiSender.resetStats()
+        previewLayer?.contents = nil
+        previewIntro = .pending
+
+        switch newMode {
+        case .send:
+            cameraController.start(deviceID: cameraController.currentDeviceID)
+            switch micSelection {
+            case .system: audioController.start()
+            case .device(let id): audioController.start(deviceID: id)
+            case .off: break
+            }
+
+        case .receive:
+            cameraController.stop()
+            audioController.stop()
+            // Takes our own source off the network: in Receive this machine is
+            // a consumer, and leaving it advertised invites a loop.
+            ndiSender.stop()
+
+            refreshVirtualCamera()
+            // The extension keeps its own selection across launches; ours is
+            // only a fallback for when it has none.
+            if virtualCamera.selectedSource == nil, let remembered = selectedNDISource {
+                VirtualCamera.select(source: remembered)
+                refreshVirtualCamera()
+            }
+        }
+
+        syncReceiveSession()
+        resetStatsDisplay()
+    }
+
+    /// Discovery and the preview receiver run exactly when this machine is
+    /// receiving *and* the menu is on screen. Both facts live here rather than
+    /// being re-checked at each of the four places that can change one of them.
+    private func syncReceiveSession() {
+        guard mode == .receive, menuIsOpen else {
+            ndiReceiver.stop()
+            ndiFinder.stop()
+            return
+        }
+
+        ndiFinder.start()
+
+        guard let source = currentSource else {
+            ndiReceiver.stop()
+            return
+        }
+        guard !(ndiReceiver.isRunning && ndiReceiver.sourceName == source) else { return }
+
+        ndiReceiver.start(source: source)
+    }
+
+    /// The preview keeps 16:9 at whatever width the menu ends up with.
+    private static func previewRowHeight(for width: CGFloat) -> CGFloat {
+        ((width - 2 * contentInsetX) * 9 / 16).rounded() + 2 * contentInsetY
+    }
+
+    /// A menu is as wide as its longest text item, and AppKit stretches the
+    /// item views to match. The rows are reset to the base width first, so a
+    /// menu that grew for a long source name can shrink again when it goes.
+    private func syncRowWidths(_ menu: NSMenu) {
+        guard !syncingMenuWidth else { return }
+        syncingMenuWidth = true
+        defer { syncingMenuWidth = false }
+
+        setRowWidths(Self.baseWidth)
+        setRowWidths(min(Self.maxWidth, max(Self.baseWidth, menu.size.width)))
+    }
+
+    private func setRowWidths(_ width: CGFloat) {
+        for row in menuRows { row.fit(to: width) }
+    }
+
+    /// The source last chosen here. The extension is the real owner of the
+    /// selection; this only survives it being reinstalled or reset.
+    private var selectedNDISource: String? {
+        get { UserDefaults.standard.string(forKey: Self.ndiSourceDefaultsKey) }
+        set { UserDefaults.standard.set(newValue, forKey: Self.ndiSourceDefaultsKey) }
+    }
+
+    /// The source the virtual camera is on, or the one we would put it on. The
+    /// extension owns the selection; ours only covers it having none.
+    private var currentSource: String? { virtualCamera.selectedSource ?? selectedNDISource }
+
+    /// Re-reads the virtual camera and restates the status line. Only called in
+    /// Receive: the read walks the CoreMediaIO device list, which in Send would
+    /// be paid at launch for a line that is hidden anyway.
+    private func refreshVirtualCamera() {
+        guard let item = virtualCameraItem else { return }
+
+        virtualCamera = VirtualCamera.status()
+
+        let title: String
+        switch (virtualCamera.isInstalled, virtualCamera.selectedSource) {
+        case (false, _):
+            title = "Virtual camera not installed — get NDI Tools"
+        case (true, nil):
+            title = "Virtual camera: no source selected"
+        case (true, let source?):
+            title = Self.fittedTitle("Virtual camera: \(virtualCamera.isInUse ? "in use" : "idle") — ", source)
+        }
+
+        item.action = virtualCamera.isInstalled ? nil : #selector(openNDITools(_:))
+        // Setting an unchanged title still invalidates the item, and this runs
+        // once a second.
+        if item.title != title { item.title = title }
+    }
+
+    /// Trims a source name so the menu stays within `maxWidth`. The rows follow
+    /// the menu's width on their own; this is only the cap on how far it grows.
+    private static func fittedTitle(_ prefix: String, _ source: String) -> String {
+        // What AppKit puts around an item's text — the state column on the left
+        // and the margin on the right. Measured: a 308 pt title made a 356 pt menu.
+        let chrome: CGFloat = 48
+        let budget = maxWidth - chrome
+        let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.menuFont(ofSize: 0)]
+
+        func width(_ text: String) -> CGFloat {
+            (text as NSString).size(withAttributes: attributes).width
+        }
+
+        guard width(prefix + source) > budget else { return prefix + source }
+
+        var trimmed = source
+        while !trimmed.isEmpty, width(prefix + trimmed + "…") > budget {
+            trimmed.removeLast()
+        }
+        return prefix + trimmed + "…"
     }
 
     private func ensureNDIStarted() {
+        guard mode == .send else { return }
         if !ndiSender.isActive {
             if !ndiSender.start() {
                 print("[Open Beam] NDI unavailable")
@@ -369,8 +675,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // closed, so zeroing would make the first tick report everything since
         // launch as if it had happened in one second.
         prevStatsTime = CFAbsoluteTimeGetCurrent()
-        prevFramesSent = ndiSender.framesSent
-        prevBytesSent = ndiSender.bytesSent
+        (prevFramesSent, prevBytesSent) = activeCounters
         prevCaptureFrameCount = statsLock.withLock { $0.count }
 
         let timer = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
@@ -404,10 +709,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statsResolutionItem.title = frameStats.width > 0
             ? "\(frameStats.width)×\(frameStats.height)"
             : "—"
-        statsFPSItem.title = "Capture \(num(captureFPS, 1)) fps → NDI \(num(ndiFPS, 1)) fps"
-        statsDataRateItem.title = "Capture \(num(captureMBps, 1)) MB/s | Wire \(num(wireMBps, 2)) MB/s"
-        statsFramesSentItem.title = "Sent: \(formatCount(ndiSender.framesSent))"
-        statsDroppedItem.title = "Dropped: \(formatCount(ndiSender.droppedFrames))"
+        switch mode {
+        case .send:
+            statsFPSItem.title = "Capture \(num(captureFPS, 1)) fps → NDI \(num(ndiFPS, 1)) fps"
+            statsDataRateItem.title = "Capture \(num(captureMBps, 1)) MB/s | Wire \(num(wireMBps, 2)) MB/s"
+            statsFramesSentItem.title = "Sent: \(formatCount(ndiSender.framesSent))"
+            statsDroppedItem.title = "Dropped: \(formatCount(ndiSender.droppedFrames))"
+
+        case .receive:
+            // The figures describe our proxy preview, not what the extension
+            // pulls at full resolution — that traffic is in its process, not ours.
+            statsFPSItem.title = "Preview \(num(captureFPS, 1)) fps"
+            statsDataRateItem.title = "Preview \(num(captureMBps, 2)) MB/s"
+            statsFramesSentItem.title = "Received: \(formatCount(ndiReceiver.framesReceived))"
+            statsDroppedItem.title = "Source: \(ndiReceiver.sourceName ?? currentSource ?? "—")"
+        }
     }
 
     /// A ladder of progressively sharper copies of the first frame. Core
@@ -469,6 +785,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         CATransaction.commit()
     }
 
+    /// The frame and byte totals of whichever pipeline is running, so the seed
+    /// and the tick cannot end up reading different ones.
+    private var activeCounters: (frames: Int64, bytes: Int64) {
+        mode == .send
+            ? (ndiSender.framesSent, ndiSender.bytesSent)
+            : (ndiReceiver.framesReceived, ndiReceiver.bytesReceived)
+    }
+
     private func updateStats() {
         let now = CFAbsoluteTimeGetCurrent()
         let elapsed = now - prevStatsTime
@@ -478,10 +802,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let captureFPS = Double(frameStats.count - prevCaptureFrameCount) / elapsed
         prevCaptureFrameCount = frameStats.count
 
-        let sent = ndiSender.framesSent
+        let (sent, totalBytes) = activeCounters
         let ndiSentFPS = Double(sent - prevFramesSent) / elapsed
-
-        let totalBytes = ndiSender.bytesSent
         let bytesInInterval = totalBytes - prevBytesSent
 
         prevFramesSent = sent
@@ -494,6 +816,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     ndiFPS: ndiSentFPS,
                     captureMBps: dataRateMBps,
                     wireMBps: netMonitor.bytesPerSecondOut / (1024.0 * 1024.0))
+
+        if mode == .receive {
+            // A call can pick the virtual camera up while the menu is open.
+            refreshVirtualCamera()
+        }
     }
 
     // MARK: - Audio Level Meter
@@ -513,7 +840,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func updateLevelMeter() {
-        let peak = audioController.currentPeak
+        // In Receive the audio is the source's, arriving with the proxy stream;
+        // it is played by whatever app took the virtual microphone, not by us.
+        let peak = (mode == .send) ? audioController.currentPeak : ndiReceiver.currentPeak
         // Map linear peak → dBFS → 0…1 over the −60 dB to 0 dB range.
         let target: Double
         if peak > 0.0001 {
@@ -564,6 +893,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSWorkspace.shared.open(URL(string: "https://github.com/manuelvegadev/OpenBeam")!)
     }
 
+    @objc private func modeChanged(_ sender: NSSegmentedControl) {
+        apply(mode: sender.selectedSegment == 0 ? .send : .receive)
+    }
+
+    @objc private func selectNDISource(_ sender: NSMenuItem) {
+        let source = sender.representedObject as? String
+        selectedNDISource = source
+        VirtualCamera.select(source: source)
+        refreshVirtualCamera()
+    }
+
+    @objc private func openNDITools(_ sender: NSMenuItem) {
+        NSWorkspace.shared.open(VirtualCamera.toolsDownloadURL)
+    }
+
     @objc private func restartNDISender(_ sender: NSMenuItem) {
         _ = ndiSender.restart()
     }
@@ -580,9 +924,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func selectAudio(_ sender: NSMenuItem) {
+        // Remembered so a trip through Receive, which stops the controller,
+        // does not silently bring the default microphone back.
         if let deviceID = sender.representedObject as? String {
+            micSelection = .device(deviceID)
             audioController.switchInput(deviceID: deviceID)
         } else {
+            micSelection = .off
             audioController.stop()
         }
     }
@@ -617,38 +965,55 @@ extension AppDelegate: NSMenuDelegate {
 
     func menuWillOpen(_ menu: NSMenu) {
         if menu === statusItem.menu {
-            menuIsOpen = true
-            startLevelTimer()
-            netMonitor.start()
-            resetStatsDisplay()
-            startStatsTimer()
-            pixelFormatToggleItem.state = (cameraController.pixelFormat == .uyvy422) ? .on : .off
+            setMenuVisible(true)
         }
     }
 
     func menuDidClose(_ menu: NSMenu) {
         if menu === statusItem.menu {
-            menuIsOpen = false
+            setMenuVisible(false)
+        }
+    }
+
+    /// Everything that runs only while the menu is on screen, started and
+    /// stopped from one place so the two halves cannot drift apart.
+    private func setMenuVisible(_ visible: Bool) {
+        menuIsOpen = visible
+
+        guard visible else {
             stopLevelTimer()
             netMonitor.stop()
             stopStatsTimer()
-            // Release the last frame: it is a full-resolution image that would
-            // otherwise sit in memory for as long as the menu stays closed.
+            syncReceiveSession()
             // Release the full-resolution frame; it would otherwise be
             // retained for as long as the menu stays closed.
             previewLayer?.contents = nil
             previewLayer?.removeAllAnimations()
             previewIntro = .pending
+            return
         }
+
+        startLevelTimer()
+        netMonitor.start()
+        resetStatsDisplay()
+        startStatsTimer()
+        pixelFormatToggleItem.state = (cameraController.pixelFormat == .uyvy422) ? .on : .off
+
+        if mode == .receive { refreshVirtualCamera() }
+        syncReceiveSession()
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
-        if menu === cameraSubmenu {
+        if menu === statusItem.menu {
+            syncRowWidths(menu)
+        } else if menu === cameraSubmenu {
             updateCameraSubmenu(menu)
         } else if menu === audioSubmenu {
             updateAudioSubmenu(menu)
         } else if menu === clipboardSubmenu {
             updateClipboardSubmenu(menu)
+        } else if menu === ndiSourceSubmenu {
+            updateNDISourceSubmenu(menu)
         }
     }
 
@@ -713,30 +1078,49 @@ extension AppDelegate: NSMenuDelegate {
         }
     }
 
+    private func updateNDISourceSubmenu(_ menu: NSMenu) {
+        // Discovery starts with the menu, so the first open often finds nothing.
+        populateSelectionMenu(menu,
+                              entries: ndiFinder.sources.sorted().map { ($0, $0) },
+                              currentID: currentSource,
+                              action: #selector(selectNDISource(_:)),
+                              includeNone: true,
+                              emptyText: "Looking for sources…")
+
+        if virtualCamera.isInstalled, !virtualCamera.canSelectSource {
+            menu.addItem(.separator())
+            _ = addDisabledItem(to: menu, title: "Choose the source in NDI Virtual Input")
+        }
+    }
+
     private func updateCameraSubmenu(_ menu: NSMenu) {
-        populateDeviceMenu(menu,
-                           devices: CameraController.availableCameras,
-                           currentID: cameraController.currentDeviceID,
-                           action: #selector(selectCamera(_:)),
-                           includeNone: false,
-                           emptyText: "No cameras found")
+        populateSelectionMenu(menu,
+                              entries: CameraController.availableCameras.map { ($0.localizedName, $0.uniqueID) },
+                              currentID: cameraController.currentDeviceID,
+                              action: #selector(selectCamera(_:)),
+                              includeNone: false,
+                              emptyText: "No cameras found")
     }
 
     private func updateAudioSubmenu(_ menu: NSMenu) {
-        populateDeviceMenu(menu,
-                           devices: AudioController.availableInputs,
-                           currentID: audioController.currentDeviceID,
-                           action: #selector(selectAudio(_:)),
-                           includeNone: true,
-                           emptyText: "No microphones found")
+        populateSelectionMenu(menu,
+                              entries: AudioController.availableInputs.map { ($0.localizedName, $0.uniqueID) },
+                              currentID: audioController.currentDeviceID,
+                              action: #selector(selectAudio(_:)),
+                              includeNone: true,
+                              emptyText: "No microphones found")
     }
 
-    private func populateDeviceMenu(_ menu: NSMenu,
-                                    devices: [AVCaptureDevice],
-                                    currentID: String?,
-                                    action: Selector,
-                                    includeNone: Bool,
-                                    emptyText: String) {
+    /// The one shape every picker in this menu has: an optional None, the
+    /// entries with a checkmark on the current one, and a disabled line when
+    /// there is nothing to pick. Cameras, microphones and NDI sources all
+    /// differ only in where the pairs come from.
+    private func populateSelectionMenu(_ menu: NSMenu,
+                                       entries: [(title: String, id: String)],
+                                       currentID: String?,
+                                       action: Selector,
+                                       includeNone: Bool,
+                                       emptyText: String) {
         menu.removeAllItems()
 
         if includeNone {
@@ -745,23 +1129,21 @@ extension AppDelegate: NSMenuDelegate {
             noneItem.representedObject = nil
             noneItem.state = (currentID == nil) ? .on : .off
             menu.addItem(noneItem)
-            if !devices.isEmpty {
+            if !entries.isEmpty {
                 menu.addItem(.separator())
             }
         }
 
-        for device in devices {
-            let item = NSMenuItem(title: device.localizedName, action: action, keyEquivalent: "")
+        for entry in entries {
+            let item = NSMenuItem(title: entry.title, action: action, keyEquivalent: "")
             item.target = self
-            item.representedObject = device.uniqueID
-            item.state = (device.uniqueID == currentID) ? .on : .off
+            item.representedObject = entry.id
+            item.state = (entry.id == currentID) ? .on : .off
             menu.addItem(item)
         }
 
-        if devices.isEmpty {
-            let placeholder = NSMenuItem(title: emptyText, action: nil, keyEquivalent: "")
-            placeholder.isEnabled = false
-            menu.addItem(placeholder)
+        if entries.isEmpty {
+            _ = addDisabledItem(to: menu, title: emptyText)
         }
     }
 }

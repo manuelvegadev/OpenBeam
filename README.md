@@ -6,7 +6,7 @@
 </p>
 
 
-A lightweight native macOS menu bar app that captures a USB webcam and broadcasts it as an NDI source on the local network.
+A lightweight native macOS menu bar app that sends a USB webcam as an NDI source on the local network — and, on the machine at the other end, turns that source into a webcam again.
 
 ![macOS 15+](https://img.shields.io/badge/macOS-15%2B-blue)
 ![Swift](https://img.shields.io/badge/Swift-5-orange)
@@ -16,11 +16,31 @@ A lightweight native macOS menu bar app that captures a USB webcam and broadcast
 
 - **Zero-dependency** — pure AppKit, no Electron, no browser tech, no OBS required
 - **Menu bar only** — lives in the system tray with a live camera preview
+- **Send and Receive** — one machine sends its camera, the other receives it and hands it to video calls as a webcam
 - **NDI output** — advertises your machine name as the NDI source, visible to any NDI receiver on the local network
 - **Camera selection** — switch between built-in and external USB cameras
 - **macOS Camera Effects** — works with Apple's built-in portrait mode, background replacement, and reactions (via the green camera button)
 - **Live statistics** — resolution, capture/NDI FPS, data rate, frame counts
 - **Lightweight** — no GPU compositing overhead, direct pixel buffer passthrough to NDI
+
+## Send and Receive
+
+The tabs at the top of the menu pick what this machine does. The two are exclusive — receiving
+stops the camera, the microphone and this machine's own NDI source.
+
+- **Send** — capture a camera and a microphone and publish them as an NDI source. This is the
+  host of the pair.
+- **Receive** — pick any NDI source on the network and point the NDI virtual camera at it. The
+  source then shows up in Zoom, Meet, Teams or FaceTime as the camera `NDI Virtual Camera` and
+  the microphone `NDI Audio`.
+
+Receive needs [NDI Tools](https://ndi.video/tools/) installed once, for its camera extension and
+audio driver. Open Beam only tells that extension which source to take: the video and audio go
+straight from the network into it, so nothing passes through this app and the camera keeps
+working after Open Beam quits. NDI Virtual Input itself never has to be open.
+
+Two things macOS reserves for the user: approving the extension the first time, and choosing
+`NDI Virtual Camera` / `NDI Audio` inside the video call app. No app can do either for you.
 
 ## Install
 
@@ -66,9 +86,13 @@ Building requires the [NDI SDK for Apple](https://ndi.video/for-developers/ndi-s
 
 ```
 OpenBeam/
-├── AppDelegate.swift        # Menu bar UI, pipeline wiring, stats
+├── AppDelegate.swift        # Menu bar UI, mode switching, pipeline wiring, stats
 ├── CameraController.swift   # AVCaptureSession, camera switching
 ├── NDISender.swift           # NDI C API bridge, async frame sending
+├── NDIReceiver.swift         # NDI reception for the preview and the level meter
+├── NDIFinder.swift           # Discovery of NDI sources on the network
+├── NDIRuntime.swift          # Refcounted NDIlib_initialize / NDIlib_destroy
+├── VirtualCamera.swift       # Points the NDI virtual camera at a source (CoreMediaIO)
 ├── BridgingHeader.h          # Exposes NDI C headers to Swift
 └── Info.plist                # Camera/network permissions, LSUIElement
 NDI/
@@ -76,7 +100,7 @@ NDI/
 └── libndi.dylib              # NDI runtime library (not included)
 ```
 
-**Frame pipeline:**
+**Frame pipeline — Send:**
 
 ```
 AVCaptureSession → CVPixelBuffer → NDIlib_send_send_video_v2
@@ -84,6 +108,19 @@ AVCaptureSession → CVPixelBuffer → NDIlib_send_send_video_v2
 ```
 
 Frames pass directly from the camera to NDI with no intermediate processing. macOS system camera effects (portrait, background, studio light) are applied by the OS before frames reach the app.
+
+**Frame pipeline — Receive:**
+
+```
+Open Beam ──CMIOObjectSetPropertyData('ndis')──→ NDI camera extension ──→ any video call app
+                                                 (receives the source itself)
+
+NDIlib_recv (proxy stream) → CALayer.contents (preview, only while the menu is open)
+```
+
+The full-resolution video never passes through Open Beam: the extension and the `NDIAudio` HAL
+driver each receive the source themselves. All Open Beam does is write the source name into the
+extension's custom CoreMediaIO property, which is what NDI Virtual Input does too.
 
 ## Building a DMG
 
