@@ -6,9 +6,16 @@ build/
 
 # Xcode
 DerivedData/
+.derived/
 *.xcuserstate
 xcuserdata/
 *.xcworkspace/xcuserdata/
+
+# Site (Node)
+node_modules/
+site/landing/dist/
+site/docs/dist/
+site/docs/doc_build/
 
 # Artifacts
 *.dmg

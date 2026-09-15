@@ -10,6 +10,10 @@
 		07C1A0AC2F688E8C00C646CC /* OpenBeam.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = OpenBeam.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXBuildFile section */
+		AB01F0012F70000000000001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = AB01F0022F70000000000002 /* Sparkle */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		07C1A0AE2F688E8C00C646CC /* OpenBeam */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
@@ -23,6 +27,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AB01F0012F70000000000001 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -66,6 +71,7 @@
 			);
 			name = OpenBeam;
 			packageProductDependencies = (
+				AB01F0022F70000000000002 /* Sparkle */,
 			);
 			productName = OpenBeam;
 			productReference = 07C1A0AC2F688E8C00C646CC /* OpenBeam.app */;
@@ -95,6 +101,9 @@
 			);
 			mainGroup = 07C1A0A32F688E8C00C646CC;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				AB01F0032F70000000000003 /* XCRemoteSwiftPackageReference "Sparkle" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 07C1A0AD2F688E8C00C646CC /* Products */;
 			projectDirPath = "";
@@ -353,6 +362,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		AB01F0032F70000000000003 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.10.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		AB01F0022F70000000000002 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AB01F0032F70000000000003 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 07C1A0A42F688E8C00C646CC /* Project object */;
 }
