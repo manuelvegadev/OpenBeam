@@ -1,0 +1,368 @@
+/* Open Beam — landing page
+   ------------------------------------------------------------------
+   The page is built around one idea: a signal leaving one machine and
+   arriving at another. Source and destination keep their own colour
+   everywhere they appear — amber for the machine that sends, teal for the
+   machine that receives — so the two halves of the product stay legible
+   without a legend. Everything else is deliberately quiet. */
+
+:root {
+  --ink: #101922;
+  --ink-deep: #0b1219;
+  --panel: #18242f;
+  --line: #24333f;
+  --paper: #e9eef2;
+  --muted: #8ea0ae;
+  --send: #f0a22e;
+  --receive: #58d3c2;
+
+  --measure: 62ch;
+  --gutter: clamp(1.25rem, 5vw, 4rem);
+
+  color-scheme: dark;
+  font-family: 'Archivo', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-synthesis-weight: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--ink);
+  color: var(--paper);
+  font-size: clamp(1rem, 0.96rem + 0.2vw, 1.0625rem);
+  line-height: 1.6;
+}
+
+a { color: inherit; }
+
+:focus-visible {
+  outline: 2px solid var(--send);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+.wrap {
+  width: 100%;
+  max-width: 68rem;
+  margin: 0 auto;
+  padding-inline: var(--gutter);
+}
+
+/* ── Header ─────────────────────────────────────────────────────── */
+
+.masthead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-block: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.wordmark {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-weight: 800;
+  font-size: 1.0625rem;
+  letter-spacing: -0.015em;
+  text-decoration: none;
+}
+
+.wordmark img { width: 26px; height: 26px; display: block; }
+
+.masthead nav {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  font-size: 0.9375rem;
+  font-weight: 500;
+}
+
+.masthead nav a { color: var(--muted); text-decoration: none; }
+.masthead nav a:hover { color: var(--paper); }
+
+/* ── Hero ───────────────────────────────────────────────────────── */
+
+.hero { padding-block: clamp(3rem, 8vw, 6rem) clamp(3rem, 7vw, 5rem); }
+
+.hero h1 {
+  margin: 0;
+  font-size: clamp(2.25rem, 1.3rem + 4.2vw, 4rem);
+  font-weight: 800;
+  line-height: 1.04;
+  letter-spacing: -0.035em;
+  max-width: 21ch;
+}
+
+.hero h1 span { display: block; }
+.hero h1 span:last-child { color: var(--muted); }
+
+.hero p {
+  margin: 1.5rem 0 0;
+  max-width: var(--measure);
+  color: var(--muted);
+}
+
+/* ── The signal path ────────────────────────────────────────────── */
+
+.path {
+  margin-block: clamp(2.5rem, 6vw, 4rem);
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: stretch;
+  gap: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: linear-gradient(180deg, var(--panel), var(--ink-deep));
+  overflow: hidden;
+}
+
+.station { padding: clamp(1.25rem, 3vw, 1.75rem); min-width: 0; }
+
+.station-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+  font-size: 0.9375rem;
+}
+
+.lamp {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+  background: currentColor;
+  box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 18%, transparent);
+}
+
+.station-send .station-head { color: var(--send); }
+.station-receive .station-head { color: var(--receive); }
+
+.station dl { margin: 1.125rem 0 0; display: grid; gap: 0.5rem; }
+
+.station dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: baseline;
+  border-top: 1px solid var(--line);
+  padding-top: 0.5rem;
+}
+
+.station dt { color: var(--muted); font-size: 0.875rem; }
+
+.station dd {
+  margin: 0;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 0.8125rem;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+/* The link between them: the one animated element on the page. */
+.link {
+  position: relative;
+  /* The distance the signal dot travels, so the keyframes can stay on transform. */
+  --run: clamp(4rem, 12vw, 9rem);
+  width: var(--run);
+  border-inline: 1px solid var(--line);
+  display: grid;
+  place-items: center;
+}
+
+.link span {
+  font-size: 0.75rem;
+  color: var(--muted);
+  background: var(--ink-deep);
+  padding: 0.25rem 0.5rem;
+  position: relative;
+  z-index: 1;
+  text-align: center;
+  line-height: 1.3;
+}
+
+.link::before {
+  content: '';
+  position: absolute;
+  inset-inline: 0;
+  top: 50%;
+  height: 1px;
+  background: linear-gradient(90deg, var(--send), var(--receive));
+  opacity: 0.45;
+}
+
+.link::after {
+  content: '';
+  position: absolute;
+  top: calc(50% - 2px);
+  left: -3px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--paper);
+  box-shadow: 0 0 10px 2px color-mix(in srgb, var(--receive) 70%, transparent);
+  /* Keyframed on transform, not left: this runs forever, and a layout property
+     would repaint the glow on the main thread every frame of it. */
+  animation: travel 2.6s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  will-change: transform;
+}
+
+@keyframes travel {
+  0%   { transform: translateX(0);           opacity: 0; }
+  12%  {                                     opacity: 1; }
+  88%  {                                     opacity: 1; }
+  100% { transform: translateX(var(--run));  opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .link::after { animation: none; left: 50%; transform: none; }
+}
+
+/* ── Actions ────────────────────────────────────────────────────── */
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+}
+
+.download {
+  display: inline-block;
+  background: var(--paper);
+  color: var(--ink-deep);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: none;
+  padding: 0.75rem 1.5rem;
+  border-radius: 7px;
+}
+
+.download:hover { background: #fff; }
+
+.meta { color: var(--muted); font-size: 0.875rem; margin: 0; }
+
+/* ── Sections ───────────────────────────────────────────────────── */
+
+section { border-top: 1px solid var(--line); padding-block: clamp(3rem, 7vw, 4.5rem); }
+
+h2 {
+  margin: 0 0 2rem;
+  font-size: clamp(1.375rem, 1.2rem + 0.8vw, 1.75rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.roles { display: grid; gap: clamp(2rem, 5vw, 3.5rem); grid-template-columns: 1fr 1fr; }
+
+.role h3 {
+  margin: 0 0 0.75rem;
+  font-size: 1.125rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.role-send h3 { color: var(--send); }
+.role-receive h3 { color: var(--receive); }
+
+.role p { margin: 0 0 0.875rem; color: var(--muted); max-width: 46ch; }
+.role p:last-child { margin-bottom: 0; }
+.role strong { color: var(--paper); font-weight: 500; }
+
+/* Capability list: a definition list, because that is what it is. */
+.capabilities { display: grid; gap: 0; margin: 0; }
+
+.capabilities > div {
+  display: grid;
+  grid-template-columns: 14rem 1fr;
+  gap: 1.5rem;
+  padding-block: 1.125rem;
+  border-top: 1px solid var(--line);
+  align-items: baseline;
+}
+
+.capabilities > div:first-child { border-top: 0; padding-top: 0; }
+.capabilities dt { font-weight: 600; }
+.capabilities dd { margin: 0; color: var(--muted); max-width: 52ch; }
+
+/* Install: genuinely a sequence, so it is numbered. */
+.steps { margin: 0; padding: 0; list-style: none; counter-reset: step; display: grid; gap: 1.5rem; }
+
+.steps li {
+  counter-increment: step;
+  display: grid;
+  grid-template-columns: 2rem 1fr;
+  gap: 1.25rem;
+  align-items: start;
+}
+
+.steps li::before {
+  content: counter(step);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--send);
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  width: 2rem;
+  height: 2rem;
+  display: grid;
+  place-items: center;
+  font-size: 0.875rem;
+}
+
+.steps h3 { margin: 0.2rem 0 0.4rem; font-size: 1.0625rem; font-weight: 600; }
+.steps p { margin: 0; color: var(--muted); max-width: 54ch; }
+.steps a { color: var(--paper); }
+
+footer {
+  border-top: 1px solid var(--line);
+  padding-block: 2.5rem 3.5rem;
+  color: var(--muted);
+  font-size: 0.875rem;
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem 2rem;
+  flex-wrap: wrap;
+}
+
+footer nav { display: flex; gap: 1.5rem; }
+footer p { margin: 0; max-width: 40ch; }
+
+@media (max-width: 46rem) {
+  .path { grid-template-columns: 1fr; }
+  .link {
+    --run: 4.5rem;
+    width: auto;
+    height: var(--run);
+    border-inline: 0;
+    border-block: 1px solid var(--line);
+  }
+  .link::before {
+    inset-inline: auto;
+    left: 50%;
+    top: 0;
+    bottom: 0;
+    height: auto;
+    width: 1px;
+    background: linear-gradient(180deg, var(--send), var(--receive));
+  }
+  .link::after {
+    animation-name: travel-down;
+    left: calc(50% - 2px);
+    top: -3px;
+  }
+  @keyframes travel-down {
+    0%   { transform: translateY(0);          opacity: 0; }
+    12%  {                                    opacity: 1; }
+    88%  {                                    opacity: 1; }
+    100% { transform: translateY(var(--run)); opacity: 0; }
+  }
+  .roles { grid-template-columns: 1fr; }
+  .capabilities > div { grid-template-columns: 1fr; gap: 0.25rem; }
+}
