@@ -328,6 +328,17 @@ The initiator, on receiving `pair_accept`:
 
 After sending, the responder closes the connection. The initiator MUST NOT persist anything.
 
+### Re-pairing
+
+A device may lose its paired-peer list (reinstall, or the user chose Forget) while the other side still has it pinned. The forgetful side pairs again as the initiator; the side that still remembers receives a `pair_request` in `paired` state, where the spec would otherwise not allow one.
+
+A receiver **MAY** accept such a `pair_request` **without asking the user again**, and this is what implementations should do, provided **all** of:
+
+- the request's `peerID`, `sigPub` and `kxPub` match the pinned peer exactly, and
+- the connection's `hello` already verified against that pinned `sigPub`.
+
+Those two together mean the request can only come from the holder of the pinned private key — the device the user already confirmed once — so no new trust is being granted and the consent in Goal 1 is not being bypassed, only not re-asked. The receiver then answers `pair_accept` and closes, as with any other accept. A receiver that would rather ask again MAY show the dialog instead; both behaviors interoperate.
+
 ### Simultaneous-pair tie-breaker
 
 If both sides attempt to initiate pairing with each other concurrently, the side with the **lexicographically smaller `peerID`** cancels its outbound attempt and waits for the other side's `pair_request` to arrive on the inbound connection. This guarantees only one pairing dialog appears per user.
@@ -411,4 +422,5 @@ Cross-implementation interop should be brought up by running both sides against 
 
 ## Change Log
 
+- **v1 (2026-09-16)**: clarified the handshake's ordering and signature binding — the responder sends its `hello` only after verifying the initiator's, because its signature binds the initiator's `sigPub`; removed the contradictory "peer's sigPub if known from a prior pairing" line from the `sig` pseudocode. Added `pair_accept` to the frames an `unpaired` peer may send (an initiator receives one in that state), and said explicitly that disallowed frames are dropped rather than closed. Added "Re-pairing". No wire-format change: same frames, same fields, same crypto.
 - **v1 (2026-05-12)**: initial revision.

@@ -230,6 +230,16 @@ extension ClipSyncManager: ClipSyncConnectionDelegate {
                     didReceivePairRequest req: PairRequestFrame,
                     verificationCode: String,
                     fingerprint: String) {
+        // Already trusted: the hello on this connection was verified against
+        // the key we pinned for them, so the request can only come from the
+        // peer we paired with — they just lost their half. Answer without
+        // making the user confirm a device they already confirmed once.
+        if identity.paired(peerID: req.peerID) != nil {
+            mgrLog.info("pair_request from an already-paired peer=\(req.peerID, privacy: .public) — re-accepting")
+            c.sendPairAccept()
+            return
+        }
+
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.onPairRequestPresented?()
