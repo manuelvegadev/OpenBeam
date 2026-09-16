@@ -11,6 +11,48 @@ deciding whether to take the update — not assembled from commit subjects.
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-09-16
+
+### Fixed
+
+- **Clipboard sync could not be set up at all.** Pressing **Pair** did nothing, on either
+  machine, with no dialog and no error. The two devices exchanged their opening handshake at
+  the same moment, which meant neither could sign it against the other's identity the way the
+  other checked for — so every attempt was dropped before a pairing request was ever sent. If
+  you have never got two machines paired, this is why.
+
+- **A pairing could end up one-sided.** The device that accepted saved the pair; the device
+  that asked never heard back, because the answer was discarded before it left the machine.
+  The two then disagreed about whether they were paired, and nothing in the app said so.
+
+- **Forgetting a device on one machine stranded the other.** The pair could not be set up
+  again until it was forgotten on both. A device you already confirmed can now ask again and
+  be accepted without a second confirmation.
+
+- **Any machine on the network could write to your clipboard.** Pairing gated what was sent
+  but not what was accepted, so clipboard contents from an unpaired device were applied. They
+  are now ignored, as are any other messages that arrive out of turn.
+
+### Added
+
+- **Both machines now show the same pairing window**, with the same six-digit code to compare
+  and the same fingerprint. The one being asked shows **Accept** and **Reject**; the one
+  asking shows the code it is waiting on, and says so if the other device declines, never
+  answers, or goes away. Before this, the machine you pressed Pair on showed nothing at all.
+
+- **Limits in the Clipboard settings.** A switch for whether copied *files* travel with the
+  clipboard, a cap on the size of text that gets sent, and a cap on file transfers that is
+  enforced in both directions — anything larger is left alone rather than sent, and an
+  oversized transfer arriving from elsewhere is refused.
+
+### Changed
+
+- **"Sync the clipboard" is remembered between launches.** It only ever lived in memory, so
+  each launch guessed from whether anything was paired.
+
+- **Paired devices are listed before discovered ones**, since what already works is what you
+  open that pane to check on.
+
 ## [2.4.0] - 2026-09-15
 
 ### Added
@@ -153,7 +195,8 @@ captures a microphone raw, with no echo canceller of its own.
   as an NDI source on the local network, with a live preview, camera selection, macOS camera
   effects and statistics.
 
-[Unreleased]: https://github.com/manuelvegadev/OpenBeam/compare/v2.4.0...HEAD
+[Unreleased]: https://github.com/manuelvegadev/OpenBeam/compare/v2.5.0...HEAD
+[2.5.0]: https://github.com/manuelvegadev/OpenBeam/compare/v2.4.0...v2.5.0
 [2.4.0]: https://github.com/manuelvegadev/OpenBeam/compare/v2.3.1...v2.4.0
 [2.3.1]: https://github.com/manuelvegadev/OpenBeam/compare/v2.3.0...v2.3.1
 [2.3.0]: https://github.com/manuelvegadev/OpenBeam/compare/v2.2.0...v2.3.0
