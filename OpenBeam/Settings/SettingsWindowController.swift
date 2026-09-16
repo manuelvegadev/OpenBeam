@@ -72,6 +72,10 @@ final class SettingsWindowController: NSObject, NSToolbarDelegate {
             backing: .buffered,
             defer: false
         )
+        // A window made in code releases itself when it closes, and the
+        // reference here does not survive that: reopening Settings would retain
+        // freed memory and crash. This controller owns the window and reuses it.
+        window.isReleasedWhenClosed = false
         // Just "Settings": the toolbar underneath already names the pane, and
         // the version has its own row in About.
         window.title = "Settings"
