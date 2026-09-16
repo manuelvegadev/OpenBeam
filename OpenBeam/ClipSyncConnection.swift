@@ -251,9 +251,33 @@ final class ClipSyncConnection: @unchecked Sendable {
         }
     }
 
+    /// Which frames this connection will act on, by handshake state. The spec's
+    /// "Verification" says an unpaired peer may exchange pair frames and
+    /// nothing else; stating that once here means a frame type added later is
+    /// gated by construction rather than by whoever remembers.
+    ///
+    /// Out-of-state frames are dropped, not fatal: a peer that still has us
+    /// pinned while we have forgotten it opens with a clipboard snapshot, and
+    /// closing on that would kill the very connection its user is pairing on.
+    private func accepts(_ type: ControlFrameType, in state: HandshakeState) -> Bool {
+        switch (type, state) {
+        case (.hello, .awaitingPeerHello):                      true
+        case (.pairRequest, .unpaired), (.pairRequest, .paired): true
+        case (.pairAccept, .unpaired), (.pairReject, .unpaired): true
+        case (.encrypted, .paired):                             true
+        default:                                                false
+        }
+    }
+
     private func dispatch(frame: Data) throws {
         guard let type = ClipSyncJSON.peekType(frame) else {
             throw ClipSyncError.malformedFrame("missing or unknown type")
+        }
+
+        let state = lock.withLock { $0.handshake }
+        guard accepts(type, in: state) else {
+            connLog.info("dropping \(type.rawValue, privacy: .public) frame from peer=\(self.peerID ?? "?", privacy: .public) in state \(String(describing: state), privacy: .public)")
+            return
         }
 
         switch type {
@@ -382,11 +406,6 @@ final class ClipSyncConnection: @unchecked Sendable {
     }
 
     private func handlePairRequest(_ req: PairRequestFrame) throws {
-        let state = lock.withLock { $0.handshake }
-        guard state == .unpaired else {
-            // Already paired — ignore (KDE-Connect-style "re-pair" not in v1).
-            return
-        }
         guard let peerHello else { throw ClipSyncError.malformedFrame("pair_request before hello") }
         guard req.peerID == peerHello.peerID, req.sigPub == peerHello.sigPub, req.kxPub == peerHello.kxPub else {
             throw ClipSyncError.identityMismatch
@@ -415,6 +434,10 @@ final class ClipSyncConnection: @unchecked Sendable {
     }
 
     private func handleEncrypted(_ env: EncryptedFrame) throws {
+        // Only reached in `.paired` — see `accepts(_:in:)`. That gate is what
+        // keeps any machine on the LAN from writing to this one's clipboard:
+        // the session key falls out of the handshake whether or not anyone
+        // paired.
         let (key, lastN, hasN, dirByte): (SymmetricKey?, UInt64, Bool, UInt8) = lock.withLock { s in
             // Receiver direction byte = opposite of our send direction.
             let dir: UInt8 = (role == .initiator) ? 0x01 : 0x00
@@ -493,14 +516,6 @@ final class ClipSyncConnection: @unchecked Sendable {
 
     private func sendThenClose(codable: some Encodable) {
         send(codable: codable) { [weak self] in self?.cancel() }
-    }
-
-    /// Promote an `unpaired` connection to `paired` after both sides confirm
-    /// (the manager calls this after persisting the peer).
-    func markPaired() {
-        lock.withLock {
-            if $0.handshake == .unpaired { $0.handshake = .paired }
-        }
     }
 
     // MARK: - Close

@@ -107,7 +107,7 @@ Each side verifies the peer's `hello`:
 - Recompute the signed message using the peer's claimed `sigPub` and the `peer_sig_pub_expected` the peer would have used: the **initiator** expects its own `sigPub` there (the responder signed against it), the **responder** expects 32 zero bytes.
 - Verify `sig` with the peer's claimed `sigPub`. **Mismatch ⇒ close the connection.**
 - If the peer is in the local paired list, additionally check that the claimed `sigPub` matches the pinned value. Mismatch ⇒ close.
-- If the peer is **not** in the local paired list, the connection is now in `unpaired` state. Only `pair_request` and `pair_reject` frames are permitted from this peer; everything else is dropped.
+- If the peer is **not** in the local paired list, the connection is now in `unpaired` state. Only the pairing frames — `pair_request`, `pair_accept` and `pair_reject` — are permitted from this peer; everything else, `encrypted` included, is **dropped without closing the connection**. (A peer that still has you pinned while you have forgotten it opens with a clipboard snapshot; closing on that would kill the connection its user is pairing on.)
 
 ### Session key derivation
 
