@@ -8,6 +8,7 @@
 import Foundation
 import CoreVideo
 import AVFoundation
+import Accelerate
 import os
 
 final class NDISender: @unchecked Sendable {
@@ -47,6 +48,37 @@ final class NDISender: @unchecked Sendable {
     private let liveInstance = OSAllocatedUnfairLock<NDIlib_send_instance_t?>(initialState: nil)
 
     var isActive: Bool { liveInstance.withLock { $0 != nil } }
+
+    /// Where audio is de-interleaved before it goes to libndi, grown to the
+    /// largest block seen and then reused. A fresh array per block is a malloc
+    /// and a zero-fill on the HAL's I/O thread ~94 times a second, and the
+    /// allocator lock is the one thing there that can make the thread miss its
+    /// deadline.
+    ///
+    /// The lock is uncontended — one capture path runs at a time — and it is
+    /// what keeps a switch between the microphone and the tap from handing the
+    /// same buffer to two threads.
+    private let scratch = OSAllocatedUnfairLock(initialState: Scratch())
+
+    private struct Scratch {
+        private var data: UnsafeMutablePointer<Float>?
+        private var capacity = 0
+
+        mutating func storage(for count: Int) -> UnsafeMutablePointer<Float>? {
+            if capacity < count {
+                data?.deallocate()
+                data = .allocate(capacity: count)
+                capacity = count
+            }
+            return data
+        }
+
+        mutating func release() {
+            data?.deallocate()
+            data = nil
+            capacity = 0
+        }
+    }
 
     func start() -> Bool {
         guard NDIRuntime.retain() else { return false }
@@ -130,40 +162,53 @@ final class NDISender: @unchecked Sendable {
     }
 
     func send(audioBuffer buffer: AVAudioPCMBuffer) {
-        // Runs on the audio tap thread roughly every 21 ms; same reason as the
-        // video path for not hopping onto `queue` to read the handle.
-        guard let instance = liveInstance.withLock({ $0 }) else { return }
+        send(audio: buffer.audioBufferList, format: buffer.format)
+    }
 
-        let format = buffer.format
-        guard format.commonFormat == .pcmFormatFloat32 else { return }
+    /// The shape both capture paths have underneath. The microphone's engine
+    /// hands out an `AVAudioPCMBuffer`; the tap has a raw buffer list, and
+    /// wrapping it in one of those per callback would be an object allocated on
+    /// the I/O thread only to be taken apart again here.
+    ///
+    /// Runs on the audio thread roughly every 10-20 ms; same reason as the
+    /// video path for not hopping onto `queue` to read the handle.
+    func send(audio bufferList: UnsafePointer<AudioBufferList>, format: AVAudioFormat) {
+        guard let instance = liveInstance.withLock({ $0 }),
+              format.commonFormat == .pcmFormatFloat32
+        else { return }
 
         let numChannels = Int(format.channelCount)
-        let numSamples = Int(buffer.frameLength)
-        guard numChannels > 0, numSamples > 0 else { return }
+        let buffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: bufferList))
+        guard numChannels > 0, buffers.count > 0, let firstData = buffers[0].mData else { return }
 
-        var planar = [Float](repeating: 0, count: numSamples * numChannels)
+        // Frames from the bytes the device actually filled, not from what the
+        // buffer could hold.
+        let bytesPerFrame = (format.isInterleaved ? numChannels : 1) * MemoryLayout<Float>.size
+        let numSamples = Int(buffers[0].mDataByteSize) / bytesPerFrame
+        guard numSamples > 0 else { return }
 
-        planar.withUnsafeMutableBufferPointer { ptr in
-            guard let base = ptr.baseAddress else { return }
+        scratch.withLock { scratch in
+            guard let base = scratch.storage(for: numSamples * numChannels) else { return }
 
             // `floatChannelData` is non-nil for an interleaved buffer too, with
             // one pointer instead of one per channel — so the layout has to be
             // asked about rather than inferred from it. Reading interleaved
             // samples as if they were planar puts both channels in both, which
             // is what a stereo tone through the system tap showed.
-            guard let samples = buffer.floatChannelData else { return }
-
             if format.isInterleaved {
-                let src = samples[0]
-                for ch in 0..<numChannels {
-                    let dst = base + ch * numSamples
-                    for i in 0..<numSamples {
-                        dst[i] = src[i * numChannels + ch]
-                    }
+                let source = firstData.assumingMemoryBound(to: Float.self)
+                for channel in 0..<numChannels {
+                    // A strided gather, which Accelerate vectorises; the scalar
+                    // loop it replaces ran 96,000 times a second at 48 kHz.
+                    cblas_scopy(Int32(numSamples),
+                                source + channel, Int32(numChannels),
+                                base + channel * numSamples, 1)
                 }
             } else {
-                for ch in 0..<numChannels {
-                    (base + ch * numSamples).update(from: samples[ch], count: numSamples)
+                guard buffers.count >= numChannels else { return }
+                for channel in 0..<numChannels {
+                    guard let data = buffers[channel].mData?.assumingMemoryBound(to: Float.self) else { return }
+                    (base + channel * numSamples).update(from: data, count: numSamples)
                 }
             }
 
@@ -208,5 +253,6 @@ final class NDISender: @unchecked Sendable {
         if ndiInstance != nil {
             stop()
         }
+        scratch.withLock { $0.release() }
     }
 }
