@@ -37,6 +37,7 @@ export default defineConfig({
           text: 'Guides',
           items: [
             { text: 'Send and receive', link: '/guides/send-receive' },
+            { text: 'Audio', link: '/guides/audio' },
             { text: 'Clipboard sync', link: '/guides/clipboard-sync' },
             { text: 'Updating', link: '/guides/updating' },
           ],

@@ -2,10 +2,10 @@
 
 OpenBeam is a menu bar app that does two things, one machine at a time:
 
-- **Send** — publishes a USB or built-in camera (and a microphone) as an NDI source on
-  your local network.
+- **Send** — publishes a USB or built-in camera (and a microphone, or what the Mac is
+  playing) as an NDI source on your local network.
 - **Receive** — takes any NDI source on that network and hands it to video calls as a
-  webcam.
+  webcam, and can send its own audio back.
 
 Point one Mac at the other and the camera on your desk becomes the camera in a call on a
 different machine, with no capture card and no OBS.
@@ -36,4 +36,5 @@ OpenBeam now advertises itself on the network under your machine's name. Anythin
 speaks NDI — another Mac running OpenBeam in Receive, OBS with the NDI plugin, a
 hardware receiver — can pick it up.
 
-Next: [Send and receive](/guides/send-receive) explains the other half.
+Next: [Send and receive](/guides/send-receive) explains the other half, and
+[Audio](/guides/audio) explains how the two ends hear each other.

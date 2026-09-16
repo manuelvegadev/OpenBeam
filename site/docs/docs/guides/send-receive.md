@@ -1,16 +1,22 @@
 # Send and receive
 
-The tabs at the top of the menu decide what this machine does. They are exclusive:
-switching to Receive stops the camera, the microphone and this machine's own NDI source,
-because one machine never usefully sends and receives at the same time.
+The tabs at the top of the menu decide what this machine does with *video*. They are
+exclusive: switching to Receive stops the camera, because one machine never usefully
+sends and receives frames at the same time.
+
+Audio is not on the tabs. Either machine can send one audio stream and play one, whichever
+tab it is on — see [Audio](/guides/audio).
 
 ## Send
 
-The host of the pair. OpenBeam captures a camera and a microphone and publishes them as
-an NDI source named after your machine.
+The host of the pair. OpenBeam captures a camera and one audio source and publishes them
+as an NDI source named after your machine.
 
 - **Camera** — built-in or any connected USB camera.
-- **Microphone** — the system default, a specific input, or off.
+- **Audio** — a microphone, or what this Mac is playing. See [Audio](/guides/audio).
+- **Listen to** and **Play audio on** — the other machine's audio, and where it comes out.
+- **NDI** — the source this machine is publishing, or `not publishing` when it has
+  nothing to put on the network.
 - **Restart NDI** — republishes the source. Useful when a receiver has lost it and you
   would rather not restart the app.
 
@@ -27,6 +33,10 @@ that source becomes a webcam for every app on the machine.
 2. Choose a source under **NDI Source**.
 3. In Zoom, Meet, Teams or FaceTime, pick the camera **NDI Virtual Camera** and the
    microphone **NDI Audio**.
+
+A machine in Receive can still send: set **Audio** to its system output and the call it is
+sitting in becomes audible on the machine you are at. That is the whole of
+[Audio](/guides/audio).
 
 Receive needs [NDI Tools](https://ndi.video/tools/) installed once, for its camera
 extension and audio driver.
