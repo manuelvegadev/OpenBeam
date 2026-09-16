@@ -11,6 +11,25 @@ deciding whether to take the update — not assembled from commit subjects.
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-09-16
+
+### Added
+
+- **Copied images travel between machines.** Take a screenshot, copy it, and paste it on the
+  other Mac as a picture — no file to find, no round trip through a folder. A copied picture
+  is sent as PNG rather than as the uncompressed bitmap the clipboard offers beside it, so a
+  Retina screenshot crosses the network as about 660 KB instead of 15 MB, and the other
+  representations are rebuilt on arrival for apps that ask for those.
+
+- **A switch for it in Settings → Clipboard**, beside the one for files, so text-only syncing
+  stays available. The transfer limit applies to images too: anything larger is left alone
+  rather than sent, and an oversized one arriving from elsewhere is refused.
+
+### Note
+
+When what you copy is both a picture and text — an image copied from a web page leaves its
+address on the clipboard beside it — the picture is what travels.
+
 ## [2.5.0] - 2026-09-16
 
 ### Fixed
@@ -195,7 +214,8 @@ captures a microphone raw, with no echo canceller of its own.
   as an NDI source on the local network, with a live preview, camera selection, macOS camera
   effects and statistics.
 
-[Unreleased]: https://github.com/manuelvegadev/OpenBeam/compare/v2.5.0...HEAD
+[Unreleased]: https://github.com/manuelvegadev/OpenBeam/compare/v2.6.0...HEAD
+[2.6.0]: https://github.com/manuelvegadev/OpenBeam/compare/v2.5.0...v2.6.0
 [2.5.0]: https://github.com/manuelvegadev/OpenBeam/compare/v2.4.0...v2.5.0
 [2.4.0]: https://github.com/manuelvegadev/OpenBeam/compare/v2.3.1...v2.4.0
 [2.3.1]: https://github.com/manuelvegadev/OpenBeam/compare/v2.3.0...v2.3.1
