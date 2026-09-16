@@ -102,7 +102,13 @@ final class ClipSyncConnection: @unchecked Sendable {
     private func handle(state: NWConnection.State) {
         switch state {
         case .ready:
-            sendHello()
+            // The initiator speaks first. The responder answers from
+            // `handleHello`, once it knows which sigPub to bind its own hello
+            // to — signing before that would bind it to 32 zero bytes, which
+            // is not what the initiator verifies against.
+            if role == .initiator {
+                sendHello(binding: Self.helloBinding(signedBy: .initiator, initiatorSigPub: identity.sigPub))
+            }
             scheduleReceive()
         case .failed(let err):
             close(with: err)
@@ -115,7 +121,16 @@ final class ClipSyncConnection: @unchecked Sendable {
 
     // MARK: - Sending
 
-    private func sendHello() {
+    /// The `peer_sig_pub_expected` a hello signature binds to, per the spec's
+    /// "Handshake": an initiator binds 32 zero bytes, because it does not yet
+    /// know who answered; a responder binds the initiator's sigPub, which it
+    /// has just read. Both the signing side and the verifying side ask this,
+    /// so the rule cannot drift between them.
+    private static func helloBinding(signedBy signer: Role, initiatorSigPub: Data) -> Data {
+        signer == .initiator ? ClipSyncIdentity.zero32 : initiatorSigPub
+    }
+
+    private func sendHello(binding peerSigPubExpected: Data) {
         // Generate ephemeral X25519 keypair for this connection.
         let eph = Curve25519.KeyAgreement.PrivateKey()
         let ephPub = eph.publicKey.rawRepresentation
@@ -124,9 +139,7 @@ final class ClipSyncConnection: @unchecked Sendable {
             $0.ephPub = ephPub
         }
 
-        // Initiator doesn't know who the peer is yet -> sign with zeros.
-        let peerExpected = ClipSyncIdentity.zero32
-        let toSign = ClipSyncIdentity.helloSignedMessage(ephPub: ephPub, peerSigPubExpected: peerExpected)
+        let toSign = ClipSyncIdentity.helloSignedMessage(ephPub: ephPub, peerSigPubExpected: peerSigPubExpected)
         guard let sig = try? identity.sign(toSign) else {
             close(with: ClipSyncError.signatureInvalid)
             return
@@ -264,12 +277,13 @@ final class ClipSyncConnection: @unchecked Sendable {
             throw ClipSyncError.malformedFrame("hello key/sig sizes")
         }
 
-        // What did the peer expect for our sigPub?
-        // - If we sent first (we're the initiator), peer's hello arrives second
-        //   and the peer should have used our actual sigPub.
-        // - If we sent second (we're the responder), peer's hello arrives first
-        //   and the peer used zeros.
-        let peerExpectedOurSigPub: Data = (role == .initiator) ? identity.sigPub : ClipSyncIdentity.zero32
+        // The peer signed as whichever role we are not, and the initiator's
+        // sigPub is ours when we dialled and theirs when we answered.
+        let initiatorSigPub = (role == .initiator) ? identity.sigPub : peerHello.sigPub
+        let peerExpectedOurSigPub = Self.helloBinding(
+            signedBy: (role == .initiator) ? .responder : .initiator,
+            initiatorSigPub: initiatorSigPub
+        )
         let signedMsg = ClipSyncIdentity.helloSignedMessage(
             ephPub: peerHello.ephPub,
             peerSigPubExpected: peerExpectedOurSigPub
@@ -298,6 +312,12 @@ final class ClipSyncConnection: @unchecked Sendable {
             isPaired = true
         } else {
             isPaired = false
+        }
+
+        // Verified: now that we know who dialled us, answer with our own hello.
+        // (The initiator sent its hello on `.ready`.)
+        if role == .responder {
+            sendHello(binding: Self.helloBinding(signedBy: .responder, initiatorSigPub: initiatorSigPub))
         }
 
         // Derive shared secrets and session key.

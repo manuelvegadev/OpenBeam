@@ -66,7 +66,7 @@ Each device generates exactly once at first launch (and persists in the OS secre
 
 ## Handshake
 
-After TCP connect, both sides immediately send **one cleartext `hello` frame each** (do not wait for the peer's hello before sending yours). Then both sides verify the peer's hello.
+After TCP connect, each side sends **one cleartext `hello` frame**, but not at the same time: the **initiator sends first**, and the **responder answers only after it has verified the initiator's hello**. The responder's signature binds the initiator's `sigPub` (see below), which it does not know until that frame arrives — a responder that sends its hello eagerly can only sign against 32 zero bytes, which is not what the initiator verifies against, and the handshake dies there.
 
 ### `hello` frame (cleartext)
 
@@ -90,20 +90,21 @@ After TCP connect, both sides immediately send **one cleartext `hello` frame eac
 
 ```
 domain = b"clipsync-v1\x00hello\x00"             // 18 bytes, with two embedded NUL bytes
-peer_sig_pub_expected = the peer's sigPub if known from a prior pairing, else 32 zero bytes
+peer_sig_pub_expected = per the role rule below: 32 zero bytes from the initiator,
+                        the initiator's sigPub from the responder
 msg = domain || ephPub || peer_sig_pub_expected   // total length = 18 + 32 + 32 = 82 bytes
 sig = Ed25519.sign(sigPriv, msg)                  // 64-byte detached signature
 ```
 
 **Important:** `ephPub` and `peer_sig_pub_expected` here are the **raw 32-byte** representations of the public keys, *not* their base64-encoded JSON wire form. The signed message is exactly 82 raw bytes. Then the resulting 64-byte `sig` is base64-encoded only when placed into the JSON `sig` field. Do not sign the base64 strings — sign the raw bytes.
 
-The initiator uses 32 zero bytes for `peer_sig_pub_expected` on every `hello` (the initiator may not know who they're connecting to — Bonjour names can change). The responder, having received the initiator's `hello` first, uses the initiator's actual `sigPub` for its own `hello`'s signature. (The initiator validates the responder's `hello` only after it knows what `sigPub` to expect — for paired peers, that's the pinned value; for unpaired peers, see "Pairing".)
+The initiator uses 32 zero bytes for `peer_sig_pub_expected` on every `hello` (the initiator may not know who they're connecting to — Bonjour names can change). The responder, having received the initiator's `hello` first, uses the initiator's actual `sigPub` for its own `hello`'s signature. This is what orders the exchange: the responder cannot sign until the initiator has spoken.
 
 ### Verification
 
 Each side verifies the peer's `hello`:
 
-- Recompute the signed message using the peer's claimed `sigPub` and the locally known/expected peer `sigPub` (initiator: zeros; responder: the value the initiator just sent).
+- Recompute the signed message using the peer's claimed `sigPub` and the `peer_sig_pub_expected` the peer would have used: the **initiator** expects its own `sigPub` there (the responder signed against it), the **responder** expects 32 zero bytes.
 - Verify `sig` with the peer's claimed `sigPub`. **Mismatch ⇒ close the connection.**
 - If the peer is in the local paired list, additionally check that the claimed `sigPub` matches the pinned value. Mismatch ⇒ close.
 - If the peer is **not** in the local paired list, the connection is now in `unpaired` state. Only `pair_request` and `pair_reject` frames are permitted from this peer; everything else is dropped.
