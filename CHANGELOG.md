@@ -11,6 +11,16 @@ deciding whether to take the update — not assembled from commit subjects.
 
 ## [Unreleased]
 
+## [2.6.1] - 2026-09-16
+
+### Fixed
+
+- **OpenBeam quit when you opened Settings a second time.** Closing the settings window left
+  the app pointing at a window that no longer existed, so the next **Settings…** crashed
+  instead of opening. The first open of a session was always fine, which is why this took a
+  while to show itself. The pairing dialog was one step away from the same fault and is fixed
+  alongside it.
+
 ## [2.6.0] - 2026-09-16
 
 ### Added
@@ -214,7 +224,8 @@ captures a microphone raw, with no echo canceller of its own.
   as an NDI source on the local network, with a live preview, camera selection, macOS camera
   effects and statistics.
 
-[Unreleased]: https://github.com/manuelvegadev/OpenBeam/compare/v2.6.0...HEAD
+[Unreleased]: https://github.com/manuelvegadev/OpenBeam/compare/v2.6.1...HEAD
+[2.6.1]: https://github.com/manuelvegadev/OpenBeam/compare/v2.6.0...v2.6.1
 [2.6.0]: https://github.com/manuelvegadev/OpenBeam/compare/v2.5.0...v2.6.0
 [2.5.0]: https://github.com/manuelvegadev/OpenBeam/compare/v2.4.0...v2.5.0
 [2.4.0]: https://github.com/manuelvegadev/OpenBeam/compare/v2.3.1...v2.4.0
