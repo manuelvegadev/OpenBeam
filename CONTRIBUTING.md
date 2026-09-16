@@ -62,29 +62,69 @@ they touch.
 - Push deliberately. Do not push a branch that still has fixup or WIP commits on
   it — squash them first.
 
+## Changelog
+
+The changelog follows [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/) and the
+version follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Two rules from
+those specs decide almost everything here: **a changelog is for humans, not machines**, and
+**every version gets an entry**.
+
+`CHANGELOG.md` at the repository root is the record. The GitHub release notes are a copy of
+that version's section — `scripts/changelog-section.sh` extracts it and `release.yml`
+publishes it — because a release page only exists inside GitHub, while the file travels with
+the repository and with the source tarball. It is also what someone reads in Sparkle's window
+before letting an update install.
+
+### Writing an entry
+
+Add to the `## [Unreleased]` section as the work lands, rather than reconstructing a release
+from its commits afterwards. Group changes under the headings the spec defines, in this order,
+omitting the ones with nothing in them:
+
+`Added` · `Changed` · `Deprecated` · `Removed` · `Fixed` · `Security`
+
+An entry is **prose, written for someone using the app**, not a commit subject. One or two
+sentences: what changed for them, and — where a bug is involved — the symptom first, so
+whoever hit it recognises it in the first line. Several commits that together did one thing
+are one entry; a commit that changed nothing a user can see is not an entry at all. A faster
+audio path, a shared helper, a test: none of them belong here, however much work they were.
+
+The commit bodies are where the material comes from. They already carry the symptom, the
+measurement and the reason; an entry is that, rewritten for someone who was not there.
+
+This is why the workflow does not generate the notes. Generated notes are the commit log, and
+the commit log for a release includes the `chore(build)` bump, every refactor and every
+scope — noise to a reader who only wants to know whether to update.
+
+### At release time
+
+Rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD`, add the compare link at the foot of the
+file, and leave a fresh empty `## [Unreleased]` above it. `release.sh` refuses to tag a version
+`CHANGELOG.md` does not describe, because by the time CI notices, the tag is already pushed.
+
 ## Release
 
 Releases are built by `.github/workflows/release.yml`, which triggers on any tag
 matching `v*`. On a macOS runner it runs `scripts/build-dmg.sh` (which produces both
 `OpenBeam.dmg` for first-time installs and `OpenBeam-<version>.zip` for Sparkle), then
 `scripts/make-appcast.sh` to sign that archive and fold it into the update feed, uploads
-all of it to a GitHub Release, and finally calls `.github/workflows/pages.yml` to publish
-the site with the new appcast. Release notes are generated from the commit history —
-which is the practical reason the commit rules above matter, as those subjects are what
-users read both on the Releases page and inside Sparkle's update window.
+all of it to a GitHub Release with that version's changelog section as its notes, and finally
+calls `.github/workflows/pages.yml` to publish the site with the new appcast.
 
 The Pages deploy is *called* from the release workflow rather than triggered by
 `on: release`, because a release created with `GITHUB_TOKEN` does not trigger workflow
 runs. An `on: release` deploy would never fire, and the appcast would never update.
 
-To cut a release, run the script — it is the whole procedure:
+To cut a release, write the changelog entry first (above), then run the script — it is the
+rest of the procedure:
 
 ```bash
 ./scripts/release.sh 1.0.2          # bump, commit, tag
 ./scripts/release.sh 1.0.2 --push   # ...and publish
 ```
 
-It refuses to run on a dirty tree or a version that already has a tag, warns if
+It refuses to run on a dirty tree, a version that already has a tag, or a version
+`CHANGELOG.md` says nothing about; warns if
 you are not on `main`, bumps `MARKETING_VERSION` in **every** build configuration
 (Debug and Release each carry their own copy), verifies none were missed and that
 the project file is still valid, commits that bump alone as

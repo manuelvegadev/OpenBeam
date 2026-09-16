@@ -1,0 +1,165 @@
+# Changelog
+
+All notable changes to OpenBeam are recorded here.
+
+The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and the
+project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+One number covers the whole app. A version's entry is what its GitHub release page says and
+what someone reads before letting Sparkle install it, so it is written for the person
+deciding whether to take the update — not assembled from commit subjects.
+
+## [Unreleased]
+
+## [2.4.0] - 2026-09-15
+
+### Added
+
+- **Audio travels in both directions.** Until now audio only went where the video went. Either
+  machine can now publish one audio stream and play one, whichever tab it is on — which is what
+  lets the Mac sitting in a video call send that call's audio back to the Mac you are at, so
+  the pair is a conversation rather than a broadcast. Three lines in the menu decide it:
+  **Audio**, what this machine sends; **Listen to**, which source it hears; and **Play audio
+  on**, which speakers that comes out of.
+
+- **A Mac's own output as an audio source.** **Audio** offers what this Mac is playing, not
+  only what a microphone hears, captured with a CoreAudio process tap. `Default output` follows
+  whatever the Mac is using at the time, and a named device comes back on its own after being
+  unplugged and plugged in again. OpenBeam leaves itself out of what it taps — so a machine
+  playing a received stream out of the very device it is tapping cannot feed itself — and never
+  mutes what it captures, so you go on hearing what you are sending.
+
+- **Playback on a device you choose.** A received stream can come out of any output on the
+  machine, held for 80 ms first so that network jitter is not a click, and it keeps playing
+  while the menu is closed.
+
+- **An Audio guide** at [openbeam.manuelvega.dev/docs/guides/audio](https://openbeam.manuelvega.dev/docs/guides/audio),
+  including the one setup this was shaped around: you at machine A, the call on machine B.
+
+### Changed
+
+- **The menu is grouped into Sending and Receiving, and every line says what it is set to** —
+  `Camera: Insta360 Link`, `Audio: Mic — Shure MV7`, `Play audio on: AirPods Pro`. Three items
+  about audio read as three ways of saying the same thing without that.
+
+- **`Microphone` is now `Audio`**, because a microphone is one of the things it can send rather
+  than the only one.
+
+- **Receiving no longer takes this machine off the network.** A Mac in Receive publishes a
+  source of its own when, and only when, it has audio to send back; the menu's `NDI:` line says
+  whether it does.
+
+- **The audio source is remembered per tab.** Send starts at the system microphone and Receive
+  at `None`, so no machine begins publishing audio because it was updated.
+
+### Note
+
+Use headphones on the machine you sit at. Its microphone is what the call hears and its
+speakers are playing that call, so on speakers the meeting hears itself back — OpenBeam
+captures a microphone raw, with no echo canceller of its own.
+
+## [2.3.1] - 2026-09-15
+
+### Changed
+
+- **The site and the update feed moved to `openbeam.manuelvega.dev`.** The landing page is now
+  the root of that domain and the documentation sits under `/docs`.
+
+## [2.3.0] - 2026-09-15
+
+### Added
+
+- **OpenBeam updates itself.** A daily check that adds a line to the menu instead of
+  interrupting whatever you are doing, and an update that is verified against an EdDSA key
+  built into the app before it is installed.
+
+- **A Settings window**, with three panes: General (open at login, UYVY sending), Updates
+  (automatic checks, background downloads, the running version) and Clipboard (sync, and the
+  devices you have paired).
+
+- **A site and documentation** at `openbeam.manuelvega.dev`: a landing page, and guides
+  organised by what you are trying to do rather than by feature.
+
+### Fixed
+
+- **GitHub reported the project as unlicensed.** The README claimed MIT and no `LICENSE` file
+  existed. The licence also now says what it does not cover: the bundled `libndi.dylib` is
+  redistributed under Vizrt's own NDI SDK licence.
+
+## [2.2.0] - 2026-09-14
+
+### Added
+
+- **Receive.** A second mode that points the NDI virtual camera at any source on the network,
+  so the machine at the other end hands that source to Zoom, Meet, Teams or FaceTime as a
+  webcam. Needs [NDI Tools](https://ndi.video/tools/) installed once, for its camera extension
+  and audio driver.
+
+## [2.1.1] - 2026-09-14
+
+### Fixed
+
+- **Clipboard sync could take the app down when a device went away.** Bonjour handles were
+  released outside the source's cancel handler, which is the one place they can be freed
+  safely.
+
+### Changed
+
+- **Sending costs less.** The frame path no longer hops onto the send queue to read the NDI
+  handle, which had been stalling roughly one frame in four at 1080p30.
+
+## [2.1.0] - 2026-09-14
+
+### Changed
+
+- **The app is idle while its menu is closed**, and the preview fades back in when you open it
+  rather than appearing mid-motion.
+
+## [2.0.0] - 2026-09-14
+
+### Changed
+
+- **CamNDI is now OpenBeam**, in the app, the bundle and the repository.
+
+### Added
+
+- **The NDI source is named after your machine**, so a receiver picking it from a list can tell
+  which Mac it is.
+- **UYVY 4:2:2 output**, for receivers that prefer it to BGRA.
+- **Wire traffic in the statistics**, alongside the capture and NDI figures.
+
+### Fixed
+
+- **Clipboard sync lost its pairings and its peers.** Discovery moved to `dns_sd`, the identity
+  is persisted, and the logs say enough to tell a dropped peer from a refused one.
+- **A UVC camera with a macOS video effect filled the log** with `Using R709` messages from
+  Apple's Portrait framework, several a second.
+
+## [1.0.1] - 2026-03-16
+
+### Added
+
+- **An app icon and a menu bar icon of its own**, rather than the placeholder.
+
+### Fixed
+
+- **The app did not build on Xcode 16.4**, over an `accessibilityLabel` call.
+
+## [1.0.0] - 2026-03-16
+
+### Added
+
+- **The first release.** A menu bar app that captures a USB or built-in camera and publishes it
+  as an NDI source on the local network, with a live preview, camera selection, macOS camera
+  effects and statistics.
+
+[Unreleased]: https://github.com/manuelvegadev/OpenBeam/compare/v2.4.0...HEAD
+[2.4.0]: https://github.com/manuelvegadev/OpenBeam/compare/v2.3.1...v2.4.0
+[2.3.1]: https://github.com/manuelvegadev/OpenBeam/compare/v2.3.0...v2.3.1
+[2.3.0]: https://github.com/manuelvegadev/OpenBeam/compare/v2.2.0...v2.3.0
+[2.2.0]: https://github.com/manuelvegadev/OpenBeam/compare/v2.1.1...v2.2.0
+[2.1.1]: https://github.com/manuelvegadev/OpenBeam/compare/v2.1.0...v2.1.1
+[2.1.0]: https://github.com/manuelvegadev/OpenBeam/compare/v2.0.0...v2.1.0
+[2.0.0]: https://github.com/manuelvegadev/OpenBeam/compare/v1.0.1...v2.0.0
+[1.0.1]: https://github.com/manuelvegadev/OpenBeam/compare/v1.0.0...v1.0.1
+[1.0.0]: https://github.com/manuelvegadev/OpenBeam/releases/tag/v1.0.0
