@@ -146,11 +146,15 @@ final class NDISender: @unchecked Sendable {
         planar.withUnsafeMutableBufferPointer { ptr in
             guard let base = ptr.baseAddress else { return }
 
-            if let channelData = buffer.floatChannelData {
-                for ch in 0..<numChannels {
-                    (base + ch * numSamples).update(from: channelData[ch], count: numSamples)
-                }
-            } else if let src = buffer.audioBufferList.pointee.mBuffers.mData?.assumingMemoryBound(to: Float.self) {
+            // `floatChannelData` is non-nil for an interleaved buffer too, with
+            // one pointer instead of one per channel — so the layout has to be
+            // asked about rather than inferred from it. Reading interleaved
+            // samples as if they were planar puts both channels in both, which
+            // is what a stereo tone through the system tap showed.
+            guard let samples = buffer.floatChannelData else { return }
+
+            if format.isInterleaved {
+                let src = samples[0]
                 for ch in 0..<numChannels {
                     let dst = base + ch * numSamples
                     for i in 0..<numSamples {
@@ -158,7 +162,9 @@ final class NDISender: @unchecked Sendable {
                     }
                 }
             } else {
-                return
+                for ch in 0..<numChannels {
+                    (base + ch * numSamples).update(from: samples[ch], count: numSamples)
+                }
             }
 
             var frame = NDIlib_audio_frame_v2_t()
