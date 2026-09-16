@@ -53,6 +53,9 @@ final class ClipSyncConnection: @unchecked Sendable {
     enum HandshakeState { case awaitingPeerHello, paired, unpaired, closed }
 
     let role: Role
+    /// True when the user opened this connection from the Pair button, which is
+    /// what earns the initiator-side pairing panel.
+    let userInitiatedPair: Bool
     weak var delegate: ClipSyncConnectionDelegate?
 
     /// Resolved peer info, valid after handshake.
@@ -79,10 +82,14 @@ final class ClipSyncConnection: @unchecked Sendable {
 
     // MARK: - Init
 
-    init(role: Role, connection: NWConnection, identity: ClipSyncIdentity) {
+    init(role: Role,
+         connection: NWConnection,
+         identity: ClipSyncIdentity,
+         userInitiatedPair: Bool = false) {
         self.role = role
         self.connection = connection
         self.identity = identity
+        self.userInitiatedPair = userInitiatedPair
     }
 
     // MARK: - Lifecycle

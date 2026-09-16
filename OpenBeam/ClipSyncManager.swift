@@ -42,7 +42,8 @@ final class ClipSyncManager: NSObject, @unchecked Sendable {
 
     /// Fires when the menu should refresh.
     var onStateChanged: (() -> Void)?
-    /// Fires when an inbound pair dialog is about to display, so the menu can collapse.
+    /// Fires when pairing UI — either end's — is about to display, so the menu
+    /// can collapse out from under it.
     var onPairRequestPresented: (() -> Void)?
 
     // MARK: - Private state
@@ -147,14 +148,14 @@ final class ClipSyncManager: NSObject, @unchecked Sendable {
     private enum Intent { case session, pair }
 
     private func adopt(connection nwc: NWConnection, role: ClipSyncConnection.Role, intent: Intent = .session) {
-        let conn = ClipSyncConnection(role: role, connection: nwc, identity: identity)
+        let conn = ClipSyncConnection(role: role,
+                                      connection: nwc,
+                                      identity: identity,
+                                      userInitiatedPair: intent == .pair)
         conn.delegate = self
-        // Default bucket: pairing — we'll move it to sessions once the handshake identifies a paired peer.
-        if intent == .pair || role == .responder {
-            lock.withLock { $0.pairing[ObjectIdentifier(conn)] = conn }
-        } else {
-            lock.withLock { $0.pairing[ObjectIdentifier(conn)] = conn }
-        }
+        // Every connection starts in the pairing bucket; the handshake moves it
+        // to sessions once it identifies a paired peer.
+        lock.withLock { $0.pairing[ObjectIdentifier(conn)] = conn }
         conn.start()
     }
 
@@ -219,9 +220,23 @@ extension ClipSyncManager: ClipSyncConnectionDelegate {
                 c?.sendEncrypted(payload: payload)
             }
         } else {
-            // Connection waits for a pair_request (initiator) or for us to send one (initiator side).
-            if c.role == .initiator {
-                c.sendPairRequest()
+            // Connection waits for a pair_request (responder) or sends one (initiator).
+            guard c.role == .initiator else { return }
+            c.sendPairRequest()
+
+            // Show the user the code the other device is about to ask them to
+            // confirm — only for a pair the user asked for, never for a session
+            // dial that happened to find an unpaired peer.
+            guard c.userInitiatedPair else { return }
+            DispatchQueue.main.async { [weak self, weak c] in
+                guard let self, let c else { return }
+                self.onPairRequestPresented?()
+                ClipSyncPairing.presentAsking(
+                    token: ObjectIdentifier(c),
+                    displayName: peerHello.displayName,
+                    verificationCode: verificationCode,
+                    fingerprint: fingerprint
+                ) { [weak c] in c?.cancel() }
             }
         }
     }
@@ -243,7 +258,8 @@ extension ClipSyncManager: ClipSyncConnectionDelegate {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.onPairRequestPresented?()
-            ClipSyncPairing.presentInboundDialog(
+            ClipSyncPairing.presentAnswering(
+                token: ObjectIdentifier(c),
                 displayName: req.displayName,
                 verificationCode: verificationCode,
                 fingerprint: fingerprint
@@ -262,6 +278,7 @@ extension ClipSyncManager: ClipSyncConnectionDelegate {
               ack.sigPub == peerHello.sigPub,
               ack.kxPub == peerHello.kxPub else {
             print("[OpenBeam] ClipSync pair_accept identity mismatch — aborting")
+            resolvePanel(for: c, outcome: .failed)
             c.cancel()
             return
         }
@@ -279,6 +296,7 @@ extension ClipSyncManager: ClipSyncConnectionDelegate {
         let firstPair = identity.pairedPeers.count == 1
         if firstPair { isEnabled = true }
         DispatchQueue.main.async { self.onStateChanged?() }
+        resolvePanel(for: c, outcome: .accepted)
 
         // Pairing connection: close and re-open as a session. (Spec says reopen
         // for clean state-machine separation.)
@@ -287,6 +305,7 @@ extension ClipSyncManager: ClipSyncConnectionDelegate {
 
     func connection(_ c: ClipSyncConnection, didReceivePairReject rej: PairRejectFrame) {
         print("[OpenBeam] ClipSync pair_reject: \(rej.reason)")
+        resolvePanel(for: c, outcome: .rejected(rej.reason))
         c.cancel()
     }
 
@@ -326,6 +345,19 @@ extension ClipSyncManager: ClipSyncConnectionDelegate {
                 state.sessions.removeValue(forKey: peerID)
             }
             if let peerID { state.pendingDial.remove(peerID) }
+        }
+        // A pair that ended without an answer: say so rather than leave the
+        // panel spinning. Accept and reject already resolved their own panel,
+        // and the token check drops this one.
+        resolvePanel(for: c, outcome: .failed)
+    }
+
+    /// Hand an outcome to this connection's pairing window, if it has one.
+    private func resolvePanel(for c: ClipSyncConnection,
+                              outcome: ClipSyncPairing.Outcome) {
+        let token = ObjectIdentifier(c)
+        DispatchQueue.main.async {
+            ClipSyncPairing.resolve(token: token, outcome: outcome)
         }
     }
 
