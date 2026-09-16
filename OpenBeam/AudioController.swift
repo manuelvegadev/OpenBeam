@@ -11,8 +11,6 @@
 //
 
 import AVFoundation
-import Accelerate
-import CoreAudio
 import os
 
 final class AudioController: NSObject, @unchecked Sendable {
@@ -69,16 +67,8 @@ final class AudioController: NSObject, @unchecked Sendable {
         let engine = AVAudioEngine()
         let input = engine.inputNode
 
-        if let unit = input.audioUnit, let halDeviceID = Self.audioDeviceID(uniqueID: device.uniqueID) {
-            var did = halDeviceID
-            AudioUnitSetProperty(
-                unit,
-                kAudioOutputUnitProperty_CurrentDevice,
-                kAudioUnitScope_Global,
-                0,
-                &did,
-                UInt32(MemoryLayout<AudioDeviceID>.size)
-            )
+        if let unit = input.audioUnit, let halDevice = AudioDevices.device(uid: device.uniqueID) {
+            AudioDevices.setDevice(halDevice.id, on: unit)
         }
 
         let format = input.outputFormat(forBus: 0)
@@ -89,7 +79,7 @@ final class AudioController: NSObject, @unchecked Sendable {
 
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
             guard let self else { return }
-            let peak = Self.peakLevel(buffer)
+            let peak = AudioLevel.peak(buffer)
             self.peakLock.withLock { $0 = peak }
             self.onAudio?(buffer)
         }
@@ -117,44 +107,5 @@ final class AudioController: NSObject, @unchecked Sendable {
         engine = nil
         currentDeviceID = nil
         peakLock.withLock { $0 = 0 }
-    }
-
-    // MARK: - Helpers
-
-    private static func audioDeviceID(uniqueID: String) -> AudioDeviceID? {
-        var deviceID = AudioDeviceID(kAudioObjectUnknown)
-        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
-        var addr = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyTranslateUIDToDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        var inputUID: CFString = uniqueID as CFString
-        let status = withUnsafePointer(to: &inputUID) { uidPtr in
-            AudioObjectGetPropertyData(
-                AudioObjectID(kAudioObjectSystemObject),
-                &addr,
-                UInt32(MemoryLayout<CFString>.size),
-                uidPtr,
-                &size,
-                &deviceID
-            )
-        }
-        guard status == noErr, deviceID != kAudioObjectUnknown else { return nil }
-        return deviceID
-    }
-
-    private static func peakLevel(_ buffer: AVAudioPCMBuffer) -> Float {
-        let numSamples = vDSP_Length(buffer.frameLength)
-        let numChannels = Int(buffer.format.channelCount)
-        guard numSamples > 0, numChannels > 0, let channelData = buffer.floatChannelData else { return 0 }
-
-        var peak: Float = 0
-        for ch in 0..<numChannels {
-            var chPeak: Float = 0
-            vDSP_maxmgv(channelData[ch], 1, &chPeak, numSamples)
-            if chPeak > peak { peak = chPeak }
-        }
-        return min(peak, 1.0)
     }
 }
