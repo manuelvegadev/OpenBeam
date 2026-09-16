@@ -141,27 +141,6 @@ Not done because the correction has not been seen to fire: NDI clocks its own
 audio and a LAN's jitter fits inside the cushion. It is worth building the first
 time someone reports a click on a long call.
 
-## A release that also changes the site races its own appcast
-
-Pushing a release pushes both the tag and the commits behind it. When any of
-those commits touches `site/**`, the push triggers `pages.yml` on its own *and*
-`release.yml` calls it again with the freshly signed appcast — two deployments
-of the same commit. Observed on v2.4.0: the standalone deploy landed at
-04:23:04 and the release's at 04:24:48, so the feed was correct.
-
-It was correct because of the order. The standalone deploy carries the feed over
-by fetching `$SITE_URL/appcast.xml`, which is served through a CDN with
-`max-age=600` — measured on that release: three minutes after the release
-deploy, the edge was still handing out the previous appcast. Had the two
-deployments landed the other way round, the site would have been republished
-with a feed that does not mention the new version, no step would have failed,
-and nobody would ever have been offered the update.
-
-The carry-over exists so a docs-only deploy cannot erase the feed, which is
-right. What is missing is a source for it that cannot be stale: read the live
-feed from the Pages origin rather than the custom domain, or rebuild the feed
-from the releases API instead of carrying the published one over.
-
 ## Unverified
 
 The preview intro animation has not been looked at since the cleanup pass that
