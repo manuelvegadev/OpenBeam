@@ -95,10 +95,6 @@ final class AudioController: NSObject, @unchecked Sendable {
         }
     }
 
-    func switchInput(deviceID: String) {
-        start(deviceID: deviceID)
-    }
-
     func stop() {
         if let engine {
             engine.inputNode.removeTap(onBus: 0)
