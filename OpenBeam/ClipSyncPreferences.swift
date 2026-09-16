@@ -25,6 +25,7 @@ final class ClipSyncPreferences: @unchecked Sendable {
     private enum Key {
         static let enabled = "com.openbeam.clipsync.enabled"
         static let syncsFiles = "com.openbeam.clipsync.syncsFiles"
+        static let syncsImages = "com.openbeam.clipsync.syncsImages"
         static let maxTextBytes = "com.openbeam.clipsync.maxTextBytes"
         static let maxTransferBytes = "com.openbeam.clipsync.maxTransferBytes"
     }
@@ -43,6 +44,12 @@ final class ClipSyncPreferences: @unchecked Sendable {
 
     func setEnabled(_ on: Bool) {
         defaults.set(on, forKey: Key.enabled)
+    }
+
+    /// Whether copying a picture broadcasts it. Off leaves text and files alone.
+    var syncsImages: Bool {
+        get { defaults.object(forKey: Key.syncsImages) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Key.syncsImages) }
     }
 
     /// Whether copying files broadcasts them. Off leaves text syncing alone.

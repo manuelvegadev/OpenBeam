@@ -192,6 +192,15 @@ private struct ClipboardPane: View {
                 }
 
                 Toggle(isOn: Binding(
+                    get: { model.clipSyncSyncsImages },
+                    set: { model.setClipSyncSyncsImages($0) }
+                )) {
+                    Text("Sync copied images")
+                    Text("A screenshot copied on one machine pastes as a picture on the other, without going through a file.")
+                }
+                .disabled(!model.clipSyncEnabled)
+
+                Toggle(isOn: Binding(
                     get: { model.clipSyncSyncsFiles },
                     set: { model.setClipSyncSyncsFiles($0) }
                 )) {
@@ -219,13 +228,13 @@ private struct ClipboardPane: View {
                         Text(byteLimit(bytes)).tag(bytes)
                     }
                 }
-                .disabled(!model.clipSyncSyncsFiles)
+                .disabled(!model.clipSyncSyncsFiles && !model.clipSyncSyncsImages)
             } header: {
                 Text("Limits")
             } footer: {
                 // A grouped form centres a footer by default, which reads as a
                 // caption under the box rather than as prose about it.
-                Text("Text over the limit stays on this machine rather than being sent. File transfers over it are refused in either direction. The largest of each is as much as the protocol carries.")
+                Text("Text over the limit stays on this machine rather than being sent. Images and file transfers over it are refused in either direction. The largest of each is as much as the protocol carries.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.leading)

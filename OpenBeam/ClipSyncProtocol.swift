@@ -105,6 +105,11 @@ struct ShareBeginPayload: Codable {
     var totalBytes: Int64
     var sentAt: Int64
     var originID: String
+    /// How the receiver should hand the payload over: absent means files on the
+    /// clipboard, `"image"` means one image to paste. Optional so a peer that
+    /// predates it ignores the key and simply receives a file, which is a worse
+    /// paste but not a broken one.
+    var paste: String?
 }
 
 struct ShareChunkPayload: Codable {

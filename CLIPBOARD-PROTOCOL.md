@@ -193,6 +193,15 @@ Same shape as `clipboard.text`. Sent once, by each side, immediately after the h
 - `name` is the basename only (no path components). `..` and absolute paths MUST be rejected by the receiver.
 - Limits: max **10 files**, max **100 MB total**. Senders MUST NOT exceed; receivers MUST reject by sending `share.cancel` with `reason: "limit_exceeded"`.
 - `sha256` is the hex SHA-256 of the file's bytes (sender precomputes; receiver verifies on `share.end`).
+- `paste` is **optional**. Absent (or any value the receiver does not know) means the transfer is files, to be committed as the platform's equivalent of file references on the clipboard. `"image"` means the transfer is a **single picture the user copied**, to be committed as image data so it pastes as a picture rather than as a file:
+
+  ```json
+  { "kind": "share.begin", "transferID": "…", "paste": "image",
+    "files": [ { "name": "clipboard.png", "size": 661362, "sha256": "<hex>" } ],
+    "totalBytes": 661362, "sentAt": 1715515200123, "originID": "<sender peerID>" }
+  ```
+
+  The bytes MUST be **PNG**. A pasteboard usually offers the same picture as an uncompressed bitmap too — on macOS a Retina screenshot is ~660 KB as PNG and ~15 MB as TIFF — so the sender converts to PNG and the receiver rebuilds any other representation locally. `paste: "image"` carries exactly one file. Because unknown keys are ignored, a peer that predates this receives a PNG file on its clipboard instead: a worse paste, not a broken one.
 
 ### `share.chunk` — payload chunk
 
@@ -422,5 +431,6 @@ Cross-implementation interop should be brought up by running both sides against 
 
 ## Change Log
 
+- **v1 (2026-09-16)**: added the optional `paste` field to `share.begin`, so a copied picture can arrive as a picture rather than as a file. Backwards compatible in both directions: an implementation that ignores the key still receives the PNG as a file.
 - **v1 (2026-09-16)**: clarified the handshake's ordering and signature binding — the responder sends its `hello` only after verifying the initiator's, because its signature binds the initiator's `sigPub`; removed the contradictory "peer's sigPub if known from a prior pairing" line from the `sig` pseudocode. Added `pair_accept` to the frames an `unpaired` peer may send (an initiator receives one in that state), and said explicitly that disallowed frames are dropped rather than closed. Added "Re-pairing". No wire-format change: same frames, same fields, same crypto.
 - **v1 (2026-05-12)**: initial revision.

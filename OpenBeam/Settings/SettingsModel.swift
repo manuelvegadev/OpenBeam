@@ -39,6 +39,7 @@ final class SettingsModel {
 
     // Clipboard
     private(set) var clipSyncEnabled = false
+    private(set) var clipSyncSyncsImages = true
     private(set) var clipSyncSyncsFiles = true
     private(set) var clipSyncMaxTextBytes = ClipSync.maxTextBytes
     private(set) var clipSyncMaxTransferBytes = ClipSync.maxShareTotalBytes
@@ -78,6 +79,7 @@ final class SettingsModel {
         lastUpdateCheck = updater.lastUpdateCheckDate
 
         clipSyncEnabled = clipSync.isEnabled
+        clipSyncSyncsImages = clipSync.preferences.syncsImages
         clipSyncSyncsFiles = clipSync.preferences.syncsFiles
         clipSyncMaxTextBytes = clipSync.preferences.maxTextBytes
         clipSyncMaxTransferBytes = clipSync.preferences.maxTransferBytes
@@ -134,6 +136,11 @@ final class SettingsModel {
 
     // The limits below have no announcement to ride on — the plugins read them
     // when they next need them — so each one refreshes the mirror itself.
+
+    func setClipSyncSyncsImages(_ on: Bool) {
+        clipSync.preferences.syncsImages = on
+        refresh()
+    }
 
     func setClipSyncSyncsFiles(_ on: Bool) {
         clipSync.preferences.syncsFiles = on

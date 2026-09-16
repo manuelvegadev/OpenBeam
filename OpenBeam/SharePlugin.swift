@@ -13,6 +13,8 @@ import CryptoKit
 import Foundation
 import os
 
+private let log = Logger(subsystem: "com.openbeam.clipsync", category: "share")
+
 final class SharePlugin: @unchecked Sendable {
 
     private let identity: ClipSyncIdentity
@@ -27,12 +29,16 @@ final class SharePlugin: @unchecked Sendable {
     private struct State {
         var inflight: [String: Inbound] = [:]      // transferID -> assembly state
         var lastBroadcastFingerprint: String = ""
+        var lastAppliedFingerprint: String = ""
     }
 
     private struct Inbound {
         let originID: String
         let files: [ShareFileMeta]
         let directory: URL
+        /// Carried from `share.begin` — decides whether the far end wanted a
+        /// file on the clipboard or a picture to paste.
+        let paste: String?
         var fileIndex: Int = 0
         var bytesWritten: Int64 = 0
         var fileHandle: FileHandle?
@@ -56,6 +62,9 @@ final class SharePlugin: @unchecked Sendable {
         self.queue = queue
         clipboardPlugin.onFileURLs = { [weak self] urls, _ in
             self?.queue.async { self?.broadcastFiles(urls) }
+        }
+        clipboardPlugin.onImage = { [weak self] png in
+            self?.queue.async { self?.broadcastImage(png) }
         }
         pruneCache()
     }
@@ -151,6 +160,66 @@ final class SharePlugin: @unchecked Sendable {
         if let d = try? ClipSyncJSON.encoder.encode(end) { broadcast?(d) }
     }
 
+    /// Send a pasteboard image as a one-file transfer marked `paste: "image"`.
+    /// It rides the file path because the problem is the same — a picture does
+    /// not fit in one frame — and only the far end's last step differs.
+    private func broadcastImage(_ png: Data) {
+        guard preferences.syncsImages else {
+            print("[OpenBeam] ClipSync image: image sync is off — not sending \(png.count) B")
+            return
+        }
+        guard png.count <= preferences.maxTransferBytes else {
+            print("[OpenBeam] ClipSync image: \(png.count) B exceeds cap \(preferences.maxTransferBytes) — skipping")
+            return
+        }
+
+        let sha = Self.sha256Hex(of: png)
+        let fingerprint = "image|\(png.count)|\(sha)"
+        let shouldSend: Bool = lock.withLock { s in
+            // Also skips a picture this machine has just been handed, so the
+            // two do not bounce one screenshot back and forth.
+            if s.lastBroadcastFingerprint == fingerprint || s.lastAppliedFingerprint == fingerprint { return false }
+            s.lastBroadcastFingerprint = fingerprint
+            return true
+        }
+        guard shouldSend else { return }
+
+        let transferID = UUID().uuidString.lowercased()
+        let meta = ShareFileMeta(name: "clipboard.png", size: Int64(png.count), sha256: sha)
+        let begin = ShareBeginPayload(
+            kind: "share.begin",
+            transferID: transferID,
+            files: [meta],
+            totalBytes: Int64(png.count),
+            sentAt: Int64(Date().timeIntervalSince1970 * 1000),
+            originID: identity.peerID,
+            paste: "image"
+        )
+        guard let beginData = try? ClipSyncJSON.encoder.encode(begin) else { return }
+        print("[OpenBeam] ClipSync image: broadcasting \(png.count) B PNG")
+        broadcast?(beginData)
+
+        let chunkSize = ClipSync.maxChunkPlaintextBytes
+        let totalChunks = max(1, (png.count + chunkSize - 1) / chunkSize)
+        for chunkIndex in 0..<totalChunks {
+            let start = png.startIndex + chunkIndex * chunkSize
+            let end = min(start + chunkSize, png.endIndex)
+            let payload = ShareChunkPayload(
+                kind: "share.chunk",
+                transferID: transferID,
+                fileIndex: 0,
+                chunkIndex: chunkIndex,
+                totalChunks: totalChunks,
+                data: png[start..<end]
+            )
+            guard let d = try? ClipSyncJSON.encoder.encode(payload) else { return }
+            broadcast?(d)
+        }
+
+        let endFrame = ShareEndPayload(kind: "share.end", transferID: transferID)
+        if let d = try? ClipSyncJSON.encoder.encode(endFrame) { broadcast?(d) }
+    }
+
     // MARK: - Inbound
 
     func handleInbound(payloadData: Data, kind: String) {
@@ -166,7 +235,8 @@ final class SharePlugin: @unchecked Sendable {
     private func handleBegin(_ data: Data) {
         guard let begin = try? ClipSyncJSON.decoder.decode(ShareBeginPayload.self, from: data) else { return }
         guard begin.originID != identity.peerID else { return }
-        guard preferences.syncsFiles else {
+        let wantsImage = begin.paste == "image"
+        guard wantsImage ? preferences.syncsImages : preferences.syncsFiles else {
             sendCancel(transferID: begin.transferID, reason: "user"); return
         }
         guard begin.files.count <= ClipSync.maxShareFileCount else {
@@ -196,7 +266,8 @@ final class SharePlugin: @unchecked Sendable {
             $0.inflight[begin.transferID] = Inbound(
                 originID: begin.originID,
                 files: begin.files,
-                directory: dir
+                directory: dir,
+                paste: begin.paste
             )
         }
     }
@@ -275,6 +346,11 @@ final class SharePlugin: @unchecked Sendable {
             }
         }
 
+        if inb.paste == "image", let url = inb.fileURLs.first {
+            commitImage(at: url, transferID: end.transferID, directory: inb.directory)
+            return
+        }
+
         // Commit: write URLs to pasteboard on main.
         let urls = inb.fileURLs
         DispatchQueue.main.async { [weak self] in
@@ -284,6 +360,38 @@ final class SharePlugin: @unchecked Sendable {
             pb.writeObjects(urls as [NSURL])
             let cc = pb.changeCount
             self.clipboardPlugin?.watcher.ackOwnWrite(changeCount: cc)
+        }
+    }
+
+    /// Put a received picture on the clipboard and drop the file it arrived in:
+    /// this is clipboard content, not a download, so nothing should be left in
+    /// the cache for a week.
+    private func commitImage(at url: URL, transferID: String, directory: URL) {
+        guard let png = try? Data(contentsOf: url) else {
+            try? FileManager.default.removeItem(at: directory)
+            return
+        }
+        try? FileManager.default.removeItem(at: directory)
+
+        let fingerprint = "image|\(png.count)|\(Self.sha256Hex(of: png))"
+        lock.withLock { $0.lastAppliedFingerprint = fingerprint }
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let item = NSPasteboardItem()
+            item.setData(png, forType: .png)
+            // A TIFF beside it, because plenty of apps ask for that and nothing
+            // else. Built here rather than sent, so the wire stays compressed.
+            if let rep = NSBitmapImageRep(data: png),
+               let tiff = rep.representation(using: .tiff, properties: [:]) {
+                item.setData(tiff, forType: .tiff)
+            }
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.writeObjects([item])
+            let cc = pb.changeCount
+            self.clipboardPlugin?.watcher.ackOwnWrite(changeCount: cc)
+            log.info("inbound image: \(png.count, privacy: .public) B on the pasteboard, changeCount=\(cc, privacy: .public)")
         }
     }
 
@@ -350,6 +458,10 @@ final class SharePlugin: @unchecked Sendable {
     }
 
     // MARK: - Helpers
+
+    private static func sha256Hex(of data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
 
     private static func sha256Hex(of url: URL) -> String? {
         guard let h = try? FileHandle(forReadingFrom: url) else { return nil }

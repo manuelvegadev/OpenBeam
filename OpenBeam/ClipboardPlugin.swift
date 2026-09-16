@@ -15,9 +15,15 @@ import os
 private let log = Logger(subsystem: "com.openbeam.clipsync", category: "clipboard")
 
 /// Snapshot of the pasteboard at one tick, classified into the highest-priority
-/// content type present (file URLs > text).
+/// content type present (file URLs > image > text).
+///
+/// An image outranks text because the pasteboard usually carries both when the
+/// image is the point: copying a picture in a browser leaves its address as a
+/// string beside it, and syncing that address instead of the picture is not
+/// what anyone meant by copy.
 enum PasteboardSnapshot {
     case fileURLs([URL])
+    case image(Data)            // PNG bytes
     case text(String)
     case empty
 }
@@ -80,10 +86,23 @@ final class PasteboardWatcher: @unchecked Sendable {
            !urls.isEmpty {
             return .fileURLs(urls)
         }
+        if let png = pngOnPasteboard(pb) {
+            return .image(png)
+        }
         if let s = pb.string(forType: .string) {
             return .text(s)
         }
         return .empty
+    }
+
+    /// PNG is what goes on the wire: a screenshot arrives as PNG already, and
+    /// the TIFF an app may offer alongside it is the same picture uncompressed —
+    /// tens of megabytes of it for a Retina screen.
+    private static func pngOnPasteboard(_ pb: NSPasteboard) -> Data? {
+        if let png = pb.data(forType: .png) { return png }
+        guard let tiff = pb.data(forType: .tiff),
+              let rep = NSBitmapImageRep(data: tiff) else { return nil }
+        return rep.representation(using: .png, properties: [:])
     }
 }
 
@@ -100,6 +119,10 @@ final class ClipboardPlugin: @unchecked Sendable {
 
     /// Called when the watcher sees file URLs — SharePlugin handles this.
     var onFileURLs: (([URL], Int) -> Void)?
+
+    /// Called when the watcher sees an image (PNG bytes) — SharePlugin carries
+    /// it, since a picture needs the same chunking a file does.
+    var onImage: ((Data) -> Void)?
 
     private let lock = OSAllocatedUnfairLock(initialState: State())
     private struct State {
@@ -193,6 +216,9 @@ final class ClipboardPlugin: @unchecked Sendable {
         case .fileURLs(let urls):
             print("[OpenBeam] ClipSync: pasteboard files change cc=\(changeCount) count=\(urls.count)")
             onFileURLs?(urls, changeCount)
+        case .image(let png):
+            log.info("pasteboard image change cc=\(changeCount, privacy: .public), \(png.count, privacy: .public) B PNG")
+            onImage?(png)
         case .empty:
             print("[OpenBeam] ClipSync: pasteboard change cc=\(changeCount) (empty/unsupported type)")
         }
