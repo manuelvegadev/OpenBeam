@@ -3,6 +3,17 @@
     <channel>
         <title>OpenBeam</title>
         <item>
+            <title>2.6.1</title>
+            <pubDate>Wed, 16 Sep 2026 19:50:43 +0000</pubDate>
+            <link>https://openbeam.manuelvega.dev</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/manuelvegadev/OpenBeam/releases</sparkle:fullReleaseNotesLink>
+            <sparkle:version>2.6.1</sparkle:version>
+            <sparkle:shortVersionString>2.6.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.7</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/manuelvegadev/OpenBeam/releases/download/v2.6.1/OpenBeam-2.6.1.zip" length="6953068" type="application/octet-stream" sparkle:edSignature="ZQLY5nGDwSf5vQ07ITj9pAgGLhgqAzS+mLYO0M1aO9w960PV4y/AiBwDoJ93z8QcTwkilm3Qr9pLvToU5tTTBQ=="/>
+        </item>
+        <item>
             <title>2.6.0</title>
             <pubDate>Wed, 16 Sep 2026 17:41:08 +0000</pubDate>
             <link>https://openbeam.manuelvega.dev</link>
