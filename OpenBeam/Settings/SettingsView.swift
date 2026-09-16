@@ -190,24 +190,46 @@ private struct ClipboardPane: View {
                     Text("Sync the clipboard")
                     Text("Copy on one machine, paste on another. Only devices you have paired.")
                 }
+
+                Toggle(isOn: Binding(
+                    get: { model.clipSyncSyncsFiles },
+                    set: { model.setClipSyncSyncsFiles($0) }
+                )) {
+                    Text("Sync copied files")
+                    Text("Copying files puts them on the other machine's clipboard too. Text only when this is off.")
+                }
+                .disabled(!model.clipSyncEnabled)
             }
 
             Section {
-                if model.discoveredPeers.isEmpty {
-                    Text("No devices found on this network.")
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(model.discoveredPeers, id: \.peerID) { peer in
-                        LabeledContent {
-                            Button("Pair") { model.pair(peer) }
-                        } label: {
-                            Text(peer.displayName)
-                            Text(osName(peer.os))
-                        }
+                Picker("Largest text:", selection: Binding(
+                    get: { model.clipSyncMaxTextBytes },
+                    set: { model.setClipSyncMaxTextBytes($0) }
+                )) {
+                    ForEach(ClipSyncPreferences.textByteChoices, id: \.self) { bytes in
+                        Text(byteLimit(bytes)).tag(bytes)
                     }
                 }
+
+                Picker("Largest transfer:", selection: Binding(
+                    get: { model.clipSyncMaxTransferBytes },
+                    set: { model.setClipSyncMaxTransferBytes($0) }
+                )) {
+                    ForEach(ClipSyncPreferences.transferByteChoices, id: \.self) { bytes in
+                        Text(byteLimit(bytes)).tag(bytes)
+                    }
+                }
+                .disabled(!model.clipSyncSyncsFiles)
             } header: {
-                Text("Discovered")
+                Text("Limits")
+            } footer: {
+                // A grouped form centres a footer by default, which reads as a
+                // caption under the box rather than as prose about it.
+                Text("Text over the limit stays on this machine rather than being sent. File transfers over it are refused in either direction. The largest of each is as much as the protocol carries.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             Section {
@@ -227,6 +249,24 @@ private struct ClipboardPane: View {
             } header: {
                 Text("Paired")
             }
+
+            Section {
+                if model.discoveredPeers.isEmpty {
+                    Text("No devices found on this network.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(model.discoveredPeers, id: \.peerID) { peer in
+                        LabeledContent {
+                            Button("Pair") { model.pair(peer) }
+                        } label: {
+                            Text(peer.displayName)
+                            Text(osName(peer.os))
+                        }
+                    }
+                }
+            } header: {
+                Text("Discovered")
+            }
         }
         .formStyle(.grouped)
         .confirmationDialog(
@@ -240,6 +280,13 @@ private struct ClipboardPane: View {
         } message: { _ in
             Text("You'll need to pair again to resume clipboard sync.")
         }
+    }
+
+    /// Sizes here are round powers of two picked from a list, so they read
+    /// better as "256 KB" than as the 262,144 bytes a byte formatter spells.
+    private func byteLimit(_ bytes: Int) -> String {
+        let mb = 1024 * 1024
+        return bytes >= mb ? "\(bytes / mb) MB" : "\(bytes / 1024) KB"
     }
 
     private func osName(_ os: String) -> String {

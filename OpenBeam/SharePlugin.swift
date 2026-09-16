@@ -17,6 +17,7 @@ final class SharePlugin: @unchecked Sendable {
 
     private let identity: ClipSyncIdentity
     private weak var clipboardPlugin: ClipboardPlugin?
+    private let preferences: ClipSyncPreferences
     private let queue: DispatchQueue
     private let lock = OSAllocatedUnfairLock(initialState: State())
 
@@ -45,9 +46,13 @@ final class SharePlugin: @unchecked Sendable {
         return dir
     }()
 
-    init(identity: ClipSyncIdentity, clipboardPlugin: ClipboardPlugin, queue: DispatchQueue) {
+    init(identity: ClipSyncIdentity,
+         clipboardPlugin: ClipboardPlugin,
+         preferences: ClipSyncPreferences,
+         queue: DispatchQueue) {
         self.identity = identity
         self.clipboardPlugin = clipboardPlugin
+        self.preferences = preferences
         self.queue = queue
         clipboardPlugin.onFileURLs = { [weak self] urls, _ in
             self?.queue.async { self?.broadcastFiles(urls) }
@@ -58,12 +63,17 @@ final class SharePlugin: @unchecked Sendable {
     // MARK: - Outbound
 
     private func broadcastFiles(_ urls: [URL]) {
+        guard preferences.syncsFiles else {
+            print("[OpenBeam] ClipSync share: file sync is off — not sending \(urls.count) file(s)")
+            return
+        }
         guard urls.count <= ClipSync.maxShareFileCount else {
             print("[OpenBeam] ClipSync share: \(urls.count) files exceeds cap \(ClipSync.maxShareFileCount)")
             return
         }
 
         // Stat + hash files. Skip if any missing or total exceeds cap.
+        let cap = preferences.maxTransferBytes
         var metas: [ShareFileMeta] = []
         var total: Int64 = 0
         for url in urls {
@@ -76,8 +86,8 @@ final class SharePlugin: @unchecked Sendable {
                 return
             }
             total &+= size.int64Value
-            if total > ClipSync.maxShareTotalBytes {
-                print("[OpenBeam] ClipSync share: total \(total) B exceeds cap \(ClipSync.maxShareTotalBytes) — skipping")
+            if total > cap {
+                print("[OpenBeam] ClipSync share: total \(total) B exceeds cap \(cap) — skipping")
                 return
             }
             guard let sha = Self.sha256Hex(of: resolved) else {
@@ -156,10 +166,13 @@ final class SharePlugin: @unchecked Sendable {
     private func handleBegin(_ data: Data) {
         guard let begin = try? ClipSyncJSON.decoder.decode(ShareBeginPayload.self, from: data) else { return }
         guard begin.originID != identity.peerID else { return }
+        guard preferences.syncsFiles else {
+            sendCancel(transferID: begin.transferID, reason: "user"); return
+        }
         guard begin.files.count <= ClipSync.maxShareFileCount else {
             sendCancel(transferID: begin.transferID, reason: "limit_exceeded"); return
         }
-        guard begin.totalBytes <= ClipSync.maxShareTotalBytes else {
+        guard begin.totalBytes <= preferences.maxTransferBytes else {
             sendCancel(transferID: begin.transferID, reason: "limit_exceeded"); return
         }
 

@@ -39,6 +39,9 @@ final class SettingsModel {
 
     // Clipboard
     private(set) var clipSyncEnabled = false
+    private(set) var clipSyncSyncsFiles = true
+    private(set) var clipSyncMaxTextBytes = ClipSync.maxTextBytes
+    private(set) var clipSyncMaxTransferBytes = ClipSync.maxShareTotalBytes
     private(set) var discoveredPeers: [DiscoveredPeer] = []
     private(set) var pairedPeers: [PairedPeer] = []
 
@@ -75,6 +78,9 @@ final class SettingsModel {
         lastUpdateCheck = updater.lastUpdateCheckDate
 
         clipSyncEnabled = clipSync.isEnabled
+        clipSyncSyncsFiles = clipSync.preferences.syncsFiles
+        clipSyncMaxTextBytes = clipSync.preferences.maxTextBytes
+        clipSyncMaxTransferBytes = clipSync.preferences.maxTransferBytes
         let paired = clipSync.pairedPeers
         pairedPeers = paired.sorted { $0.displayName < $1.displayName }
         let pairedIDs = Set(paired.map(\.peerID))
@@ -124,6 +130,24 @@ final class SettingsModel {
 
     func setClipSyncEnabled(_ on: Bool) {
         clipSync.isEnabled = on
+    }
+
+    // The limits below have no announcement to ride on — the plugins read them
+    // when they next need them — so each one refreshes the mirror itself.
+
+    func setClipSyncSyncsFiles(_ on: Bool) {
+        clipSync.preferences.syncsFiles = on
+        refresh()
+    }
+
+    func setClipSyncMaxTextBytes(_ bytes: Int) {
+        clipSync.preferences.maxTextBytes = bytes
+        refresh()
+    }
+
+    func setClipSyncMaxTransferBytes(_ bytes: Int) {
+        clipSync.preferences.maxTransferBytes = bytes
+        refresh()
     }
 
     func pair(_ peer: DiscoveredPeer) {

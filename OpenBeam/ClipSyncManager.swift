@@ -18,6 +18,7 @@ final class ClipSyncManager: NSObject, @unchecked Sendable {
     // MARK: - Dependencies
 
     private let identity = ClipSyncIdentity()
+    let preferences = ClipSyncPreferences()
     private let discovery: ClipSyncDiscovery
     private let clipboard: ClipboardPlugin
     private let share: SharePlugin
@@ -33,7 +34,9 @@ final class ClipSyncManager: NSObject, @unchecked Sendable {
                 $0.isEnabled = newValue
                 return true
             }
-            if changed { onStateChanged?() }
+            guard changed else { return }
+            preferences.setEnabled(newValue)    // survives the next launch
+            onStateChanged?()
         }
     }
 
@@ -65,8 +68,11 @@ final class ClipSyncManager: NSObject, @unchecked Sendable {
     override init() {
         identity.loadOrCreate()
         self.discovery = ClipSyncDiscovery(identity: identity)
-        self.clipboard = ClipboardPlugin(identity: identity, queue: ioQueue)
-        self.share = SharePlugin(identity: identity, clipboardPlugin: clipboard, queue: ioQueue)
+        self.clipboard = ClipboardPlugin(identity: identity, preferences: preferences, queue: ioQueue)
+        self.share = SharePlugin(identity: identity,
+                                 clipboardPlugin: clipboard,
+                                 preferences: preferences,
+                                 queue: ioQueue)
         super.init()
 
         // Wire plugins to broadcast through this manager.
@@ -94,10 +100,9 @@ final class ClipSyncManager: NSObject, @unchecked Sendable {
         discovery.start()
         clipboard.start()
         // Once discovery surfaces a paired peer, dial it lazily on first outbound.
-        // Restored isEnabled state across launches isn't tracked yet (v1: defaults to true if any peers exist).
-        if !identity.pairedPeers.isEmpty {
-            isEnabled = true
-        }
+        // The toggle is whatever the user last set it to; a machine that has
+        // never been asked starts on as soon as it has someone to sync with.
+        isEnabled = preferences.enabled ?? !identity.pairedPeers.isEmpty
     }
 
     func stop() {

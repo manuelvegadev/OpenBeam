@@ -93,6 +93,7 @@ final class ClipboardPlugin: @unchecked Sendable {
 
     let watcher: PasteboardWatcher
     private let identity: ClipSyncIdentity
+    private let preferences: ClipSyncPreferences
 
     /// Called by manager to broadcast a payload on every paired+open connection.
     var broadcast: ((Data) -> Void)?
@@ -107,8 +108,9 @@ final class ClipboardPlugin: @unchecked Sendable {
         var lastWriteChangeCount: Int = -1
     }
 
-    init(identity: ClipSyncIdentity, queue: DispatchQueue) {
+    init(identity: ClipSyncIdentity, preferences: ClipSyncPreferences, queue: DispatchQueue) {
         self.identity = identity
+        self.preferences = preferences
         self.watcher = PasteboardWatcher(queue: queue)
         self.watcher.onChange = { [weak self] snap, cc in
             self?.handle(snapshot: snap, changeCount: cc)
@@ -124,8 +126,10 @@ final class ClipboardPlugin: @unchecked Sendable {
             guard let self else { return }
             let pb = NSPasteboard.general
             // Files ignored for snapshot — share plugin handles those on change only.
-            guard let s = pb.string(forType: .string), !s.isEmpty else { return }
-            guard let payload = self.makeTextPayload(s, kind: "clipboard.text.snapshot") else { return }
+            guard let s = pb.string(forType: .string),
+                  let sendable = self.sendableText(s),
+                  let payload = self.makeTextPayload(s, hash: sendable.hash, kind: "clipboard.text.snapshot")
+            else { return }
             send(payload)
         }
     }
@@ -194,15 +198,22 @@ final class ClipboardPlugin: @unchecked Sendable {
         }
     }
 
-    private func broadcastText(_ s: String) {
+    /// The one gate every outbound text passes: empty is nothing to say, over
+    /// the user's cap is left alone. Returns the size and hash it had to
+    /// compute anyway, so nothing downstream walks the string again.
+    private func sendableText(_ s: String) -> (size: Int, hash: String)? {
         let utf8 = Data(s.utf8)
-        guard !utf8.isEmpty, utf8.count <= ClipSync.maxTextBytes else {
-            if utf8.count > ClipSync.maxTextBytes {
-                print("[OpenBeam] ClipSync: skipping text \(utf8.count) B (cap \(ClipSync.maxTextBytes))")
-            }
-            return
+        let cap = preferences.maxTextBytes
+        guard !utf8.isEmpty else { return nil }
+        guard utf8.count <= cap else {
+            log.info("skipping text \(utf8.count, privacy: .public) B (cap \(cap, privacy: .public))")
+            return nil
         }
-        let hash = Self.hashHex(utf8)
+        return (utf8.count, Self.hashHex(utf8))
+    }
+
+    private func broadcastText(_ s: String) {
+        guard let (size, hash) = sendableText(s) else { return }
         let shouldSend: Bool = lock.withLock { s in
             if s.lastBroadcastHash == hash || s.lastAppliedHash == hash { return false }
             s.lastBroadcastHash = hash
@@ -212,19 +223,19 @@ final class ClipboardPlugin: @unchecked Sendable {
             print("[OpenBeam] ClipSync: text dedup skip (hash matches recent broadcast/apply)")
             return
         }
-        guard let payload = makeTextPayload(s, kind: "clipboard.text") else { return }
-        print("[OpenBeam] ClipSync: broadcasting text \(utf8.count) B, hasBroadcaster=\(broadcast != nil)")
+        guard let payload = makeTextPayload(s, hash: hash, kind: "clipboard.text") else { return }
+        log.info("broadcasting text \(size, privacy: .public) B")
         broadcast?(payload)
     }
 
-    private func makeTextPayload(_ body: String, kind: String) -> Data? {
-        let utf8 = Data(body.utf8)
+    /// `hash` comes from `sendableText`, which already walked these bytes.
+    private func makeTextPayload(_ body: String, hash: String, kind: String) -> Data? {
         let payload = ClipboardTextPayload(
             kind: kind,
             body: body,
             sentAt: Int64(Date().timeIntervalSince1970 * 1000),
             originID: identity.peerID,
-            contentHash: Self.hashHex(utf8)
+            contentHash: hash
         )
         return try? ClipSyncJSON.encoder.encode(payload)
     }
