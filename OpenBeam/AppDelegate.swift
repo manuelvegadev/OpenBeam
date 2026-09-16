@@ -51,9 +51,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let cameraController = CameraController()
     private let audioController = AudioController()
+    private let systemAudioTap = SystemAudioTap()
     private let ndiSender = NDISender()
     private let ndiFinder = NDIFinder()
     private let ndiReceiver = NDIReceiver()
+    private let ndiAudioReceiver = NDIAudioReceiver()
+    private let audioPlayer = AudioOutputPlayer()
     private let clipSyncManager = ClipSyncManager()
     private let netMonitor = NetTrafficMonitor()
 
@@ -72,8 +75,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var checkForUpdatesItem: NSMenuItem!
 
     /// Which half of the host/client pair this machine plays. The two are
-    /// exclusive: receiving takes the camera, the microphone and our own NDI
-    /// source down, so one machine never sends and receives at the same time.
+    /// exclusive for video: receiving takes the camera down, so one machine
+    /// never sends and receives frames at the same time.
+    ///
+    /// Audio is not on the tabs at all. Either machine can send a stream and
+    /// play one, because the far end of a call is only worth having if it can
+    /// be heard as well as seen.
     private enum AppMode: String { case send, receive }
 
     private static let modeDefaultsKey = "mode"
@@ -86,6 +93,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// both derive from this, so a rename cannot leave one of them behind.
     static let repoURL = URL(string: "https://github.com/manuelvegadev/OpenBeam")!
     private static let ndiSourceDefaultsKey = "ndiSource"
+    /// Send keeps the key it has always had; Receive's is new, so an install
+    /// that has never chosen keeps the behaviour it had before there was
+    /// anything to choose.
+    private static func audioSourceDefaultsKey(for mode: AppMode) -> String {
+        mode == .send ? "audioSource" : "audioSourceReceive"
+    }
+    private static let playbackOutputDefaultsKey = "playbackOutput"
+    private static let listenSourceDefaultsKey = "listenSource"
+    /// Stored for "send nothing", which a missing key cannot mean: that is a
+    /// machine that has never chosen, and it sends its microphone.
+    private static let offIdentifier = "off"
 
     /// Held in a lock because the capture and audio threads read it on every
     /// frame — `ensureNDIStarted` must not revive the sender just after Receive
@@ -93,9 +111,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let modeState = OSAllocatedUnfairLock(initialState: AppMode.send)
     private var mode: AppMode { modeState.withLock { $0 } }
     private var modeControl: NSSegmentedControl!
-    /// Items only one mode shows, recorded as each is built.
-    private var itemVisibility: [(item: NSMenuItem, mode: AppMode)] = []
+    /// Which modes show which item, recorded as each is built.
+    private var itemVisibility: [(item: NSMenuItem, modes: Set<AppMode>)] = []
     private var virtualCameraItem: NSMenuItem!
+    /// Says whether this machine is publishing a source, in either mode.
+    private var ndiStatusItem: NSMenuItem!
+    /// Every picker carries its own answer in its title, so the menu says what
+    /// this machine is set to without four submenus having to be opened.
+    private var cameraItem: NSMenuItem!
+    private var audioItem: NSMenuItem!
+    private var sourceItem: NSMenuItem!
+    private var listenItem: NSMenuItem!
+    private var playbackItem: NSMenuItem!
     /// The width every row starts from; the menu grows past it only when a text
     /// item needs more, and the rows then follow.
     private static let baseWidth: CGFloat = 336
@@ -114,11 +141,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// row resizing would recurse.
     private var syncingMenuWidth = false
 
-    /// The microphone the user picked, kept because `AudioController.stop()`
-    /// forgets its device across a trip through Receive. One value rather than
-    /// a flag beside an id, so "off with a device remembered" cannot happen.
-    private enum MicSelection { case system, off, device(String) }
-    private var micSelection: MicSelection = .system
+    /// The one audio source Send puts on the network. NDI carries a single
+    /// audio stream, so a microphone and a machine's own output are
+    /// alternatives rather than two switches.
+    ///
+    /// Kept here because `AudioController.stop()` forgets its device across a
+    /// trip through Receive, and one value rather than a flag beside an id, so
+    /// "off with a device remembered" cannot happen.
+    private enum AudioSource: Equatable {
+        case off
+        /// Whatever `AVCaptureDevice.default(for: .audio)` resolves to.
+        case defaultInput
+        case input(uid: String)
+        case output(AudioOutputTarget)
+    }
+
+    /// The audio source is remembered per mode, because the two roles send
+    /// different things: the machine you sit at sends your voice, the one in
+    /// the call sends what the call is saying. One setting for both would
+    /// change what a machine publishes every time the tab was touched.
+    ///
+    /// Their defaults differ for the same reason. Send has always captured a
+    /// microphone; Receive has always published nothing at all, and a client
+    /// that put its microphone on the network the moment it was updated would
+    /// be a surprise nobody asked for.
+    private var audioSources: [AppMode: AudioSource] = [.send: .defaultInput, .receive: .off]
+
+    private var audioSource: AudioSource {
+        get { audioSources[mode] ?? .off }
+        set {
+            audioSources[mode] = newValue
+            UserDefaults.standard.set(Self.identifier(for: newValue) ?? Self.offIdentifier,
+                                      forKey: Self.audioSourceDefaultsKey(for: mode))
+        }
+    }
+
+    /// The source Send listens to, which is the other machine's way back: the
+    /// receiving machine is in a call, and this is how its side of it is heard
+    /// here. Receive needs no such setting — it listens to the source it is
+    /// already taking.
+    private var selectedListenSource: String? {
+        didSet { UserDefaults.standard.set(selectedListenSource, forKey: Self.listenSourceDefaultsKey) }
+    }
+
+    /// Where a machine plays what it is given, or nil for nowhere — which is the
+    /// default, because a machine that starts making noise by itself the first
+    /// time it receives is not a good surprise.
+    /// What `startAudioCapture` last acted on. Starting a controller stops and
+    /// reopens its device, so this is what makes running it again harmless —
+    /// and being harmless is what lets it sit in `reconcile()` with the rest.
+    private var appliedAudioSource: AudioSource?
+
+    private var playbackTarget: AudioOutputTarget? {
+        didSet {
+            UserDefaults.standard.set(playbackTarget.map { Self.identifier(for: $0) },
+                                      forKey: Self.playbackOutputDefaultsKey)
+        }
+    }
 
     /// Last read of the virtual camera, refreshed on menu opens and on the
     /// stats tick. Cached because every read walks the CoreMediaIO device list.
@@ -127,6 +206,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var cameraSubmenu: NSMenu!
     private var audioSubmenu: NSMenu!
     private var ndiSourceSubmenu: NSMenu!
+    private var listenSubmenu: NSMenu!
+    private var playbackSubmenu: NSMenu!
     private var statsSubmenu: NSMenu!
 
     private var meterTrackLayer: CALayer!
@@ -171,6 +252,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         let saved = AppMode(rawValue: UserDefaults.standard.string(forKey: Self.modeDefaultsKey) ?? "") ?? .send
         modeState.withLock { $0 = saved }
+        for mode in [AppMode.send, .receive] {
+            guard let stored = UserDefaults.standard.string(forKey: Self.audioSourceDefaultsKey(for: mode))
+            else { continue }
+            audioSources[mode] = Self.audioSource(for: stored)
+        }
+        playbackTarget = Self.outputTarget(for: UserDefaults.standard.string(forKey: Self.playbackOutputDefaultsKey))
+        selectedListenSource = UserDefaults.standard.string(forKey: Self.listenSourceDefaultsKey)
         buildStatusItem()
         configurePipeline()
         apply(mode: saved)
@@ -215,8 +303,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         stopLevelTimer()
         cameraController.stop()
         audioController.stop()
+        systemAudioTap.stop()
         ndiSender.stop()
         ndiReceiver.stop()
+        ndiAudioReceiver.stop()
+        audioPlayer.stop()
         ndiFinder.stop()
         clipSyncManager.stop()
         netMonitor.stop()
@@ -365,48 +456,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         addRow(meterContainer, to: menu)
 
-        menu.addItem(.separator())
+        // --- What this machine puts on the network ---
+        //
+        // Two headings rather than one list. Three of these items are about
+        // audio and each is about a different half of it — what is sent, what
+        // is heard, where it comes out — and without the headings the menu
+        // reads as three ways of saying the same thing.
+        menu.addItem(.sectionHeader(title: "Sending"))
 
-        // --- Camera selection submenu ---
-        let cameraItem = NSMenuItem(title: "Camera", action: nil, keyEquivalent: "")
+        cameraItem = NSMenuItem(title: "Camera", action: nil, keyEquivalent: "")
         cameraSubmenu = NSMenu()
         cameraSubmenu.delegate = self
         cameraItem.submenu = cameraSubmenu
-        add(cameraItem, to: menu, visibleIn: .send)
+        add(cameraItem, to: menu, visibleIn: [.send])
 
-        // --- Microphone selection submenu ---
-        let audioItem = NSMenuItem(title: "Microphone", action: nil, keyEquivalent: "")
+        // In both modes: the machine in the call is the one whose audio the
+        // other end wants, and it is the one in Receive.
+        audioItem = NSMenuItem(title: "Audio", action: nil, keyEquivalent: "")
         audioSubmenu = NSMenu()
         audioSubmenu.delegate = self
         audioItem.submenu = audioSubmenu
-        add(audioItem, to: menu, visibleIn: .send)
+        add(audioItem, to: menu)
 
-        // --- NDI source selection (Receive) ---
-        let sourceItem = NSMenuItem(title: "NDI Source", action: nil, keyEquivalent: "")
-        ndiSourceSubmenu = NSMenu()
-        ndiSourceSubmenu.delegate = self
-        sourceItem.submenu = ndiSourceSubmenu
-        add(sourceItem, to: menu, visibleIn: .receive)
-
-        // --- Virtual camera status (Receive) ---
-        virtualCameraItem = NSMenuItem(title: "Virtual camera", action: nil, keyEquivalent: "")
-        virtualCameraItem.target = self
-        add(virtualCameraItem, to: menu, visibleIn: .receive)
-
-        // An ordinary member of the send-only block: hiding it with the block
-        // is what stops Receive showing two separators in a row.
-        add(.separator(), to: menu, visibleIn: .send)
-
-        // --- NDI source label + restart ---
-        let ndiLabel = NSMenuItem(title: "NDI: \(NDISender.sourceName)", action: nil, keyEquivalent: "")
-        ndiLabel.isEnabled = false
-        add(ndiLabel, to: menu, visibleIn: .send)
+        // Under this heading because it is the answer to "is anything of mine
+        // going out at all", which in Receive depends on the item above it.
+        ndiStatusItem = NSMenuItem(title: "NDI: \(NDISender.sourceName)", action: nil, keyEquivalent: "")
+        ndiStatusItem.isEnabled = false
+        add(ndiStatusItem, to: menu)
 
         let restartNDI = NSMenuItem(title: "Restart NDI",
                                     action: #selector(restartNDISender(_:)),
                                     keyEquivalent: "")
         restartNDI.target = self
-        add(restartNDI, to: menu, visibleIn: .send)
+        add(restartNDI, to: menu)
+
+        // --- What this machine takes off the network ---
+        menu.addItem(.sectionHeader(title: "Receiving"))
+
+        // Receive's picker feeds the virtual camera, and the audio that comes
+        // with it is what this machine plays. Send has no such stream, so it
+        // is told which source to listen to instead.
+        sourceItem = NSMenuItem(title: "NDI Source", action: nil, keyEquivalent: "")
+        ndiSourceSubmenu = NSMenu()
+        ndiSourceSubmenu.delegate = self
+        sourceItem.submenu = ndiSourceSubmenu
+        add(sourceItem, to: menu, visibleIn: [.receive])
+
+        listenItem = NSMenuItem(title: "Listen to", action: nil, keyEquivalent: "")
+        listenSubmenu = NSMenu()
+        listenSubmenu.delegate = self
+        listenItem.submenu = listenSubmenu
+        add(listenItem, to: menu, visibleIn: [.send])
+
+        playbackItem = NSMenuItem(title: "Play audio on", action: nil, keyEquivalent: "")
+        playbackSubmenu = NSMenu()
+        playbackSubmenu.delegate = self
+        playbackItem.submenu = playbackSubmenu
+        add(playbackItem, to: menu)
+
+        virtualCameraItem = NSMenuItem(title: "Virtual camera", action: nil, keyEquivalent: "")
+        virtualCameraItem.target = self
+        add(virtualCameraItem, to: menu, visibleIn: [.receive])
 
         menu.addItem(.separator())
 
@@ -451,11 +561,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = menu
     }
 
-    /// Adds an item only one mode shows, stating that where the item is built
-    /// instead of in a list at the other end of the builder.
-    private func add(_ item: NSMenuItem, to menu: NSMenu, visibleIn mode: AppMode) {
+    /// Adds an item and states, where the item is built rather than in a list
+    /// at the other end of the builder, which modes show it. Everything goes
+    /// through here — including the rows both modes show, which would otherwise
+    /// be indistinguishable from a row whose visibility someone forgot to
+    /// state.
+    private func add(_ item: NSMenuItem,
+                     to menu: NSMenu,
+                     visibleIn modes: Set<AppMode> = [.send, .receive]) {
         menu.addItem(item)
-        itemVisibility.append((item, mode))
+        itemVisibility.append((item, modes))
     }
 
     /// Adds a row whose contents are laid out from its own width, applying the
@@ -483,7 +598,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         cameraController.onFrame = { [weak self] pixelBuffer in
             guard let self else { return }
 
-            self.ensureNDIStarted()
             self.record(width: CVPixelBufferGetWidth(pixelBuffer),
                         height: CVPixelBufferGetHeight(pixelBuffer))
             self.ndiSender.send(pixelBuffer: pixelBuffer)
@@ -494,9 +608,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         audioController.onAudio = { [weak self] buffer in
-            guard let self else { return }
-            self.ensureNDIStarted()
-            self.ndiSender.send(audioBuffer: buffer)
+            self?.ndiSender.send(audioBuffer: buffer)
+        }
+
+        // The other thing that can fill the same stream. Only one of the two
+        // is ever running — `startAudioCapture` sees to that — so they never
+        // reach the sender at once.
+        systemAudioTap.onAudio = { [weak self] bufferList, format in
+            self?.ndiSender.send(audio: bufferList, format: format)
+        }
+
+        // In Receive the audio comes off the network instead, and goes to a
+        // speaker on this machine rather than to NDI.
+        ndiAudioReceiver.onAudio = { [weak self] audio in
+            self?.audioPlayer.play(audio)
         }
 
         // In Receive the frames come off the network instead, at proxy
@@ -549,14 +674,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Mode
 
-    /// The one place a mode change happens. Send and Receive are exclusive, so
-    /// each side is fully torn down before the other starts.
+    /// The one place a mode change happens. The two video pipelines are
+    /// exclusive, so each is fully torn down before the other starts; audio
+    /// crosses the change untouched, apart from the source coming down when
+    /// Receive is left with nothing to put on it.
     private func apply(mode newMode: AppMode) {
         modeState.withLock { $0 = newMode }
         UserDefaults.standard.set(newMode.rawValue, forKey: Self.modeDefaultsKey)
         modeControl?.selectedSegment = (newMode == .send) ? 0 : 1
 
-        for (item, visibility) in itemVisibility { item.isHidden = visibility != newMode }
+        for (item, modes) in itemVisibility { item.isHidden = !modes.contains(newMode) }
 
         // The counters describe one pipeline or the other, never a mix.
         statsLock.withLock { $0 = (0, 0, 0) }
@@ -569,19 +696,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch newMode {
         case .send:
             cameraController.start(deviceID: cameraController.currentDeviceID)
-            switch micSelection {
-            case .system: audioController.start()
-            case .device(let id): audioController.start(deviceID: id)
-            case .off: break
-            }
 
         case .receive:
             cameraController.stop()
-            audioController.stop()
-            // Takes our own source off the network: in Receive this machine is
-            // a consumer, and leaving it advertised invites a loop.
-            ndiSender.stop()
-
             refreshVirtualCamera()
             // The extension keeps its own selection across launches; ours is
             // only a fallback for when it has none.
@@ -591,15 +708,85 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        syncReceiveSession()
+        reconcile()
+        // The menu stays open across a tab switch, so the titles have to
+        // follow; every other mutation closes it and they are restated on the
+        // next open.
+        refreshTitles()
         resetStatsDisplay()
     }
 
-    /// Discovery and the preview receiver run exactly when this machine is
-    /// receiving *and* the menu is on screen. Both facts live here rather than
-    /// being re-checked at each of the four places that can change one of them.
+    /// Everything that follows from the settings, run together. Each of these
+    /// is a reconciler that compares what should be running with what is, so
+    /// running all four costs nothing when nothing changed — and that is what
+    /// lets every mutation call one function instead of choosing a subset.
+    /// Choosing the subset per call site is how a stream comes to be silently
+    /// not started.
+    private func reconcile() {
+        startAudioCapture()
+        syncNDIPublishing()
+        syncReceiveSession()
+        syncAudioPlayback()
+    }
+
+    /// Runs the capture the chosen source needs and stops the other one. NDI
+    /// carries a single audio stream, so the two are alternatives — and this
+    /// runs in either mode, because the audio a machine sends is not tied to
+    /// whether it is the one sending video.
+    private func startAudioCapture() {
+        guard appliedAudioSource != audioSource else { return }
+        appliedAudioSource = audioSource
+
+        switch audioSource {
+        case .off:
+            audioController.stop()
+            systemAudioTap.stop()
+        case .defaultInput:
+            systemAudioTap.stop()
+            audioController.start()
+        case .input(let uid):
+            systemAudioTap.stop()
+            audioController.start(deviceID: uid)
+        case .output(let target):
+            audioController.stop()
+            systemAudioTap.start(target: target)
+        }
+    }
+
+    /// The source this machine plays. Receive is already taking one, so that is
+    /// the one to listen to; Send has to be told which of the machines on the
+    /// network is the one talking back.
+    private var listenSource: String? {
+        switch mode {
+        case .receive:  return currentSource
+        case .send:     return selectedListenSource
+        }
+    }
+
+    /// Playback follows the same rule as the camera extension rather than the
+    /// preview's: it runs whenever this machine has something to play and
+    /// somewhere to play it, menu open or closed. Listening to the other
+    /// machine is not something you do only while a menu is on screen.
+    private func syncAudioPlayback() {
+        guard let playbackTarget, let source = listenSource else {
+            ndiAudioReceiver.stop()
+            audioPlayer.stop()
+            return
+        }
+
+        audioPlayer.start(target: playbackTarget)
+
+        guard !(ndiAudioReceiver.isRunning && ndiAudioReceiver.sourceName == source) else { return }
+        ndiAudioReceiver.start(source: source)
+    }
+
+    /// Discovery and the preview receiver run while the menu is on screen —
+    /// discovery in either mode, because Send's "Listen to" picker needs the
+    /// same list Receive's does, and the preview only where there is one.
+    /// Both facts live here rather than being re-checked at each of the places
+    /// that can change one of them.
     private func syncReceiveSession() {
-        guard mode == .receive, menuIsOpen else {
+        guard menuIsOpen else {
             ndiReceiver.stop()
             ndiFinder.stop()
             return
@@ -607,7 +794,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         ndiFinder.start()
 
-        guard let source = currentSource else {
+        guard mode == .receive, let source = currentSource else {
             ndiReceiver.stop()
             return
         }
@@ -625,7 +812,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// item views to match. The rows are reset to the base width first, so a
     /// menu that grew for a long source name can shrink again when it goes.
     private func syncRowWidths(_ menu: NSMenu) {
-        guard !syncingMenuWidth else { return }
         syncingMenuWidth = true
         defer { syncingMenuWidth = false }
 
@@ -694,14 +880,97 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return prefix + trimmed + "…"
     }
 
-    private func ensureNDIStarted() {
-        guard mode == .send else { return }
-        if !ndiSender.isActive {
-            if !ndiSender.start() {
+    /// Whether this machine has audio to put on the network. In Receive that
+    /// is the whole of what it publishes.
+    private var publishesAudio: Bool { audioSource != .off }
+
+    /// Send always has a camera to publish; Receive publishes only what its
+    /// audio picker says. Stated once, because the sender's lifecycle and the
+    /// line that reports it have to agree.
+    private var shouldPublish: Bool { mode == .send || publishesAudio }
+
+    /// Puts the source on the network, or takes it off when there is nothing
+    /// left to put on it — which in Receive is what turning audio off means.
+    /// Send keeps its source either way: the camera is still on it.
+    ///
+    /// The sender's only owner. It used to come up on the first frame or
+    /// buffer a capture delivered, which a microphone does from the moment it
+    /// opens — so the difference never showed until a tapped output, which on
+    /// macOS 26 runs no I/O cycle at all while its device is idle. A machine
+    /// that had chosen to send its system audio then stayed invisible on the
+    /// network until something happened to play on it, and the other end cannot
+    /// pick a source it cannot see.
+    ///
+    /// Being the only owner is also what lets the capture callbacks be three
+    /// lines: they had to ask, per frame and per buffer, a question that only
+    /// changes when the user changes something.
+    private func syncNDIPublishing() {
+        if shouldPublish {
+            if !ndiSender.isActive, !ndiSender.start() {
                 print("[OpenBeam] NDI unavailable")
             }
+        } else if ndiSender.isActive {
+            ndiSender.stop()
+        }
+        refreshNDIStatus()
+    }
+
+    /// Restates every picker's title from what it is actually set to. Called
+    /// before the menu is shown rather than kept in step from each place that
+    /// can change one of them: the answers come from the controllers, and the
+    /// controllers change on their own — a device is unplugged, a microphone
+    /// is refused, the default output moves.
+    private func refreshTitles() {
+        guard let cameraItem else { return }
+
+        cameraItem.title = Self.fittedTitle("Camera: ", cameraName ?? "None")
+        audioItem.title = Self.fittedTitle("Audio: ", audioDescription)
+        sourceItem.title = Self.fittedTitle("NDI Source: ", currentSource ?? "None")
+        listenItem.title = Self.fittedTitle("Listen to: ", selectedListenSource ?? "None")
+        playbackItem.title = Self.fittedTitle("Play audio on: ", Self.name(of: playbackTarget))
+    }
+
+    private var cameraName: String? {
+        guard let id = cameraController.currentDeviceID else { return nil }
+        return AVCaptureDevice(uniqueID: id)?.localizedName
+    }
+
+    /// Names the kind as well as the device. "Mic" and "System audio" are the
+    /// distinction the whole picker exists to make, and a device name alone
+    /// does not carry it: plenty of devices are both an input and an output.
+    private var audioDescription: String {
+        switch audioSource {
+        case .off:
+            return "None"
+        case .defaultInput, .input:
+            let running = audioController.currentDeviceID.flatMap { AVCaptureDevice(uniqueID: $0)?.localizedName }
+            if let running { return "Mic — \(running)" }
+            if case .input(let uid) = audioSource,
+               let named = AVCaptureDevice(uniqueID: uid)?.localizedName { return "Mic — \(named)" }
+            return "Mic — system microphone"
+        case .output(let target):
+            return "System audio — \(Self.name(of: target))"
         }
     }
+
+    private static func name(of target: AudioOutputTarget?) -> String {
+        switch target {
+        case nil:                   return "None"
+        case .systemDefault:        return "Default output"
+        case .device(let uid):      return AudioDevices.device(uid: uid)?.name ?? uid
+        }
+    }
+
+    /// The source line, which in Receive depends on whether audio is being
+    /// sent back. Cheap enough for the stats tick, and that is what keeps it
+    /// honest when the sender comes up on the first buffer rather than here.
+    private func refreshNDIStatus() {
+        guard let ndiStatusItem else { return }
+        let title = ndiSender.isActive ? "NDI: \(NDISender.sourceName)" : "NDI: not publishing"
+        if ndiStatusItem.title != title { ndiStatusItem.title = title }
+    }
+
+
 
     // MARK: - Preview Helper
 
@@ -887,9 +1156,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     wireMBps: netMonitor.bytesPerSecondOut / (1024.0 * 1024.0))
 
         if mode == .receive {
-            // A call can pick the virtual camera up while the menu is open.
+            // A call can pick the virtual camera up while the menu is open, and
+            // the source can be changed in NDI Virtual Input — which is how a
+            // change made outside this app reaches the playback below.
             refreshVirtualCamera()
         }
+
+        reconcile()
     }
 
     // MARK: - Audio Level Meter
@@ -909,9 +1182,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func updateLevelMeter() {
-        // In Receive the audio is the source's, arriving with the proxy stream;
-        // it is played by whatever app took the virtual microphone, not by us.
-        let peak = (mode == .send) ? audioController.currentPeak : ndiReceiver.currentPeak
+        let peak = currentAudioPeak
         // Map linear peak → dBFS → 0…1 over the −60 dB to 0 dB range.
         let target: Double
         if peak > 0.0001 {
@@ -948,6 +1219,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         CATransaction.commit()
+    }
+
+    /// The audio each mode is about: what Send is putting on the network, and
+    /// what Receive is taking off it. A machine now has both — Send can listen
+    /// to the far end and Receive can send its audio back — so the meter shows
+    /// the other one only when the first is silent for want of being switched
+    /// on at all.
+    ///
+    /// In Receive the played stream is preferred over the proxy one: it is the
+    /// same audio, seen at full quality instead of through the preview.
+    private var currentAudioPeak: Float {
+        switch mode {
+        case .send:
+            return capturePeak ?? (audioPlayer.isPlaying ? audioPlayer.currentPeak : 0)
+        case .receive:
+            return audioPlayer.isPlaying ? audioPlayer.currentPeak : ndiReceiver.currentPeak
+        }
+    }
+
+    /// The peak of whichever capture the audio picker asked for, and nil when
+    /// it asked for none — taken from the choice rather than by asking each
+    /// controller in turn whether it happens to be running, which was a policy
+    /// written as a priority order and stated nowhere.
+    private var capturePeak: Float? {
+        switch audioSource {
+        case .off:                  return nil
+        case .defaultInput, .input: return audioController.currentPeak
+        case .output:               return systemAudioTap.currentPeak
+        }
     }
 
     private func formatCount(_ n: Int64) -> String {
@@ -992,6 +1292,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         selectedNDISource = source
         VirtualCamera.select(source: source)
         refreshVirtualCamera()
+        reconcile()
     }
 
     @objc private func openNDITools(_ sender: NSMenuItem) {
@@ -1008,14 +1309,77 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func selectAudio(_ sender: NSMenuItem) {
-        // Remembered so a trip through Receive, which stops the controller,
-        // does not silently bring the default microphone back.
-        if let deviceID = sender.representedObject as? String {
-            micSelection = .device(deviceID)
-            audioController.switchInput(deviceID: deviceID)
-        } else {
-            micSelection = .off
-            audioController.stop()
+        audioSource = Self.audioSource(for: sender.representedObject as? String)
+        reconcile()
+    }
+
+    @objc private func selectListenSource(_ sender: NSMenuItem) {
+        selectedListenSource = sender.representedObject as? String
+        reconcile()
+    }
+
+    @objc private func selectPlaybackOutput(_ sender: NSMenuItem) {
+        playbackTarget = Self.outputTarget(for: sender.representedObject as? String)
+        reconcile()
+    }
+
+    // MARK: - Naming a selection
+
+    // The menu, the check mark and `UserDefaults` all name an audio selection
+    // the same way, so a round trip through any of them cannot change what it
+    // means. Device UIDs contain colons of their own, which is why only the
+    // first one separates the kind from the id.
+
+    private static func identifier(for source: AudioSource) -> String? {
+        switch source {
+        case .off:              return nil
+        case .defaultInput:     return "input"
+        case .input(let uid):   return "input:\(uid)"
+        case .output(let target): return identifier(for: target)
+        }
+    }
+
+    private static func identifier(for target: AudioOutputTarget) -> String {
+        switch target {
+        case .systemDefault:        return "output"
+        case .device(let uid):      return "output:\(uid)"
+        }
+    }
+
+    private static func audioSource(for identifier: String?) -> AudioSource {
+        switch identifier {
+        case nil, offIdentifier:    return .off
+        case "input":               return .defaultInput
+        case "output":              return .output(.systemDefault)
+        default:
+            guard let (kind, id) = split(identifier) else { return .off }
+            return kind == "output" ? .output(.device(uid: id)) : .input(uid: id)
+        }
+    }
+
+    private static func outputTarget(for identifier: String?) -> AudioOutputTarget? {
+        guard case .output(let target) = audioSource(for: identifier) else { return nil }
+        return target
+    }
+
+    private static func split(_ identifier: String?) -> (kind: String, id: String)? {
+        guard let identifier else { return nil }
+        let parts = identifier.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2, !parts[1].isEmpty else { return nil }
+        return (String(parts[0]), String(parts[1]))
+    }
+
+    /// What the audio picker puts its check mark on. An input reports the
+    /// device that is actually running rather than the choice, so "the system
+    /// microphone" ticks the microphone it resolved to; an output reports the
+    /// choice, so "Default output" stays ticked when the default changes under
+    /// it.
+    private var audioSelectionID: String? {
+        switch audioSource {
+        case .off:                      return nil
+        case .defaultInput, .input:
+            return audioController.currentDeviceID.map { Self.identifier(for: .input(uid: $0)) } ?? nil
+        case .output(let target):       return Self.identifier(for: target)
         }
     }
 }
@@ -1045,7 +1409,7 @@ extension AppDelegate: NSMenuDelegate {
             stopLevelTimer()
             netMonitor.stop()
             stopStatsTimer()
-            syncReceiveSession()
+            reconcile()
             // Release the full-resolution frame; it would otherwise be
             // retained for as long as the menu stays closed.
             previewLayer?.contents = nil
@@ -1060,11 +1424,18 @@ extension AppDelegate: NSMenuDelegate {
         startStatsTimer()
 
         if mode == .receive { refreshVirtualCamera() }
-        syncReceiveSession()
+        reconcile()
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         if menu === statusItem.menu {
+            // Reading `menu.size` below re-enters this method; without the
+            // guard here the re-entrant pass would restate every title — which
+            // now means a device lookup each — to measure a width it is in the
+            // middle of measuring.
+            guard !syncingMenuWidth else { return }
+            // Titles first: they are what the width is then measured from.
+            refreshTitles()
             syncRowWidths(menu)
         } else if menu === cameraSubmenu {
             updateCameraSubmenu(menu)
@@ -1072,13 +1443,17 @@ extension AppDelegate: NSMenuDelegate {
             updateAudioSubmenu(menu)
         } else if menu === ndiSourceSubmenu {
             updateNDISourceSubmenu(menu)
+        } else if menu === playbackSubmenu {
+            updatePlaybackSubmenu(menu)
+        } else if menu === listenSubmenu {
+            updateListenSubmenu(menu)
         }
     }
 
     private func updateNDISourceSubmenu(_ menu: NSMenu) {
         // Discovery starts with the menu, so the first open often finds nothing.
         populateSelectionMenu(menu,
-                              entries: ndiFinder.sources.sorted().map { ($0, $0) },
+                              entries: otherSources.map { ($0, $0) },
                               currentID: currentSource,
                               action: #selector(selectNDISource(_:)),
                               includeNone: true,
@@ -1100,17 +1475,66 @@ extension AppDelegate: NSMenuDelegate {
     }
 
     private func updateAudioSubmenu(_ menu: NSMenu) {
+        let microphones = AudioController.availableInputs.compactMap { device in
+            Self.identifier(for: .input(uid: device.uniqueID)).map { (title: device.localizedName, id: $0) }
+        }
         populateSelectionMenu(menu,
-                              entries: AudioController.availableInputs.map { ($0.localizedName, $0.uniqueID) },
-                              currentID: audioController.currentDeviceID,
+                              sections: [MenuSection(header: "Microphones", entries: microphones),
+                                         MenuSection(header: "System audio", entries: Self.outputEntries())],
+                              currentID: audioSelectionID,
                               action: #selector(selectAudio(_:)),
                               includeNone: true,
-                              emptyText: "No microphones found")
+                              emptyText: "No audio devices found")
+    }
+
+    private func updateListenSubmenu(_ menu: NSMenu) {
+        populateSelectionMenu(menu,
+                              entries: otherSources.map { ($0, $0) },
+                              currentID: selectedListenSource,
+                              action: #selector(selectListenSource(_:)),
+                              includeNone: true,
+                              emptyText: "Looking for sources…")
+    }
+
+    /// Every source on the network except this machine's own, which both
+    /// pickers have reason to leave out. Listening to yourself is a loop with a
+    /// delay on it, and pointing the virtual camera at your own source would
+    /// put a machine's own speakers into the call it is sitting in — which is
+    /// newly possible now that Receive publishes its audio.
+    ///
+    /// NDI advertises a source as `HOST (name)`, and the name is ours.
+    private var otherSources: [String] {
+        let ours = "(\(NDISender.sourceName))"
+        return ndiFinder.sources.filter { !$0.hasSuffix(ours) }.sorted()
+    }
+
+    private func updatePlaybackSubmenu(_ menu: NSMenu) {
+        populateSelectionMenu(menu,
+                              entries: Self.outputEntries(),
+                              currentID: playbackTarget.map { Self.identifier(for: $0) },
+                              action: #selector(selectPlaybackOutput(_:)),
+                              includeNone: true,
+                              emptyText: "No outputs found")
+    }
+
+    /// The outputs both audio pickers offer, headed by the one that means
+    /// "whatever this Mac is playing through" rather than a fixed device.
+    private static func outputEntries() -> [(title: String, id: String)] {
+        [(title: "Default output", id: identifier(for: .systemDefault))]
+            + AudioDevices.outputs().map { (title: $0.name, id: identifier(for: .device(uid: $0.uid))) }
+    }
+
+    /// A run of entries under one heading. Only the audio picker has more
+    /// than one: microphones and outputs are different kinds of thing, and the
+    /// list reads as a single jumble without saying so.
+    private struct MenuSection {
+        let header: String?
+        let entries: [(title: String, id: String)]
     }
 
     /// The one shape every picker in this menu has: an optional None, the
     /// entries with a checkmark on the current one, and a disabled line when
-    /// there is nothing to pick. Cameras, microphones and NDI sources all
+    /// there is nothing to pick. Cameras, audio devices and NDI sources all
     /// differ only in where the pairs come from.
     private func populateSelectionMenu(_ menu: NSMenu,
                                        entries: [(title: String, id: String)],
@@ -1118,7 +1542,23 @@ extension AppDelegate: NSMenuDelegate {
                                        action: Selector,
                                        includeNone: Bool,
                                        emptyText: String) {
+        populateSelectionMenu(menu,
+                              sections: [MenuSection(header: nil, entries: entries)],
+                              currentID: currentID,
+                              action: action,
+                              includeNone: includeNone,
+                              emptyText: emptyText)
+    }
+
+    private func populateSelectionMenu(_ menu: NSMenu,
+                                       sections: [MenuSection],
+                                       currentID: String?,
+                                       action: Selector,
+                                       includeNone: Bool,
+                                       emptyText: String) {
         menu.removeAllItems()
+
+        let sections = sections.filter { !$0.entries.isEmpty }
 
         if includeNone {
             let noneItem = NSMenuItem(title: "None", action: action, keyEquivalent: "")
@@ -1126,20 +1566,22 @@ extension AppDelegate: NSMenuDelegate {
             noneItem.representedObject = nil
             noneItem.state = (currentID == nil) ? .on : .off
             menu.addItem(noneItem)
-            if !entries.isEmpty {
-                menu.addItem(.separator())
+        }
+
+        for section in sections {
+            if menu.numberOfItems > 0 { menu.addItem(.separator()) }
+            if let header = section.header { menu.addItem(.sectionHeader(title: header)) }
+
+            for entry in section.entries {
+                let item = NSMenuItem(title: entry.title, action: action, keyEquivalent: "")
+                item.target = self
+                item.representedObject = entry.id
+                item.state = (entry.id == currentID) ? .on : .off
+                menu.addItem(item)
             }
         }
 
-        for entry in entries {
-            let item = NSMenuItem(title: entry.title, action: action, keyEquivalent: "")
-            item.target = self
-            item.representedObject = entry.id
-            item.state = (entry.id == currentID) ? .on : .off
-            menu.addItem(item)
-        }
-
-        if entries.isEmpty {
+        if sections.isEmpty {
             _ = addDisabledItem(to: menu, title: emptyText)
         }
     }
