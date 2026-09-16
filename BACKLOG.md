@@ -79,7 +79,7 @@ tidier.
 `statsSubmenu` is the only submenu without `delegate = self`; the others update on
 demand through `menuNeedsUpdate`. Because of that, the stats timer and the `nettop`
 sampling are gated on the *top-level* menu, so they run while the user is browsing
-Camera or Microphone, where the figures cannot be seen.
+Camera or Audio, where the figures cannot be seen.
 
 Setting the delegate and moving the start/stop into `menuWillOpen(statsSubmenu)` /
 `menuDidClose(statsSubmenu)` puts stats on the same on-demand mechanism as every
@@ -99,6 +99,47 @@ default deserves to be pickier: skip devices whose `localizedName` is the virtua
 camera (or, better, whose transport type is not a real capture device) when no
 camera has been chosen yet. The chosen camera is also not persisted across
 launches, which is the other half of the same gap.
+
+## Mix a microphone into the system audio being sent
+
+Send puts one audio source on the network because NDI carries one audio stream,
+so choosing a machine's output means giving up its microphone. Talking over what
+the machine is playing — a demo with commentary — needs both, which means a
+mixer: the two arrive at different rates and block sizes, from two threads, so
+it is a ring per source, a resampler and a gain per input rather than an
+addition.
+
+Deliberately not built. The exclusive picker is what a routing choice looks like
+when it is one decision, and it is worth knowing whether anyone reaches for the
+mix before paying for it.
+
+## Nothing cancels the echo on the machine you sit at
+
+The pair now carries audio both ways, which puts one machine's speakers and its
+microphone in the same room and the same call: on speakers rather than
+headphones, the meeting hears itself back. OpenBeam captures a microphone raw.
+
+macOS has the piece that fixes it — the Voice Processing I/O unit, which is an
+`AUVoiceIO` output unit set on the capture device, and cancels what that device
+is playing out of what it hears. It is not free: it takes the device rather than
+a stream, it resamples and gates and gains inside itself, and it changes what a
+microphone sounds like even when nothing is playing. So it belongs behind a
+setting rather than in the capture path, and it wants its own pass.
+
+Documented here rather than in the README because the workaround — headphones —
+is the one most people are using already.
+
+## Catch up on drift by skipping a quiet block, not the oldest one
+
+`AudioOutputPlayer`'s ring throws away the excess when the stream falls more than
+240 ms behind, which is the bluntest correction there is: whatever was in those
+samples is audibly gone. Choosing the quietest block within the excess instead,
+and only taking a loud one when no quiet one has come along for a few seconds,
+makes the same correction inaudible.
+
+Not done because the correction has not been seen to fire: NDI clocks its own
+audio and a LAN's jitter fits inside the cushion. It is worth building the first
+time someone reports a click on a long call.
 
 ## Unverified
 
