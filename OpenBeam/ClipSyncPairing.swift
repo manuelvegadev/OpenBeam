@@ -127,6 +127,10 @@ final class PairingPanel: NSObject, NSWindowDelegate {
         super.init()
 
         panel.title = "Pair"
+        // Same reason as the settings window: a panel made in code releases
+        // itself when it closes, and this controller outlives that close — it
+        // still touches `panel` on the way out of `close()`.
+        panel.isReleasedWhenClosed = false
         panel.isFloatingPanel = true
         panel.level = .floating
         panel.hidesOnDeactivate = false
