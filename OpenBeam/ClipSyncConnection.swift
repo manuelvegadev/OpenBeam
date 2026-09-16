@@ -159,12 +159,20 @@ final class ClipSyncConnection: @unchecked Sendable {
         send(codable: hello)
     }
 
-    func send(codable: some Encodable) {
+    /// `then` fires once the transport has taken the bytes. Anything that closes
+    /// the connection after a frame must wait for it: cancelling in the same
+    /// breath as `send` drops the frame on the floor, which is how a pair_accept
+    /// used to go missing while the accepting side considered itself paired.
+    func send(codable: some Encodable, then: (() -> Void)? = nil) {
         do {
             let body = try ClipSyncJSON.encoder.encode(codable)
             let framed = ClipSyncFraming.wrap(body)
             connection.send(content: framed, completion: .contentProcessed { [weak self] err in
-                if let err { self?.close(with: err) }
+                if let err {
+                    self?.close(with: err)
+                    return
+                }
+                then?()
             })
         } catch {
             close(with: error)
@@ -457,6 +465,10 @@ final class ClipSyncConnection: @unchecked Sendable {
         send(codable: req)
     }
 
+    /// Both pair answers close the connection once the frame is on the wire —
+    /// the spec closes the pairing connection after each, and cancelling in the
+    /// same breath as `send` drops the frame on the floor. Doing it here means
+    /// no call site can get either half wrong.
     func sendPairAccept() {
         let ack = PairAcceptFrame(
             v: ClipSync.protocolVersion,
@@ -467,7 +479,7 @@ final class ClipSyncConnection: @unchecked Sendable {
             sigPub: identity.sigPub,
             kxPub: identity.kxPub
         )
-        send(codable: ack)
+        sendThenClose(codable: ack)
     }
 
     func sendPairReject(reason: String) {
@@ -476,7 +488,11 @@ final class ClipSyncConnection: @unchecked Sendable {
             type: ControlFrameType.pairReject.rawValue,
             reason: reason
         )
-        send(codable: rej)
+        sendThenClose(codable: rej)
+    }
+
+    private func sendThenClose(codable: some Encodable) {
+        send(codable: codable) { [weak self] in self?.cancel() }
     }
 
     /// Promote an `unpaired` connection to `paired` after both sides confirm

@@ -336,13 +336,12 @@ extension ClipSyncManager: ClipSyncConnectionDelegate {
             ))
             let firstPair = identity.pairedPeers.count == 1
             if firstPair { isEnabled = true }
+            // `sendPairAccept` closes once the frame is out, per spec —
+            // sessions reconnect on demand.
             c.sendPairAccept()
-            // Per spec, close the pairing connection — sessions reconnect on demand.
-            c.cancel()
             DispatchQueue.main.async { self.onStateChanged?() }
         case .reject(let reason):
             c.sendPairReject(reason: reason)
-            c.cancel()
         }
     }
 }
