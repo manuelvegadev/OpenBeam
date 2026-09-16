@@ -32,6 +32,15 @@
 	<string>OpenBeam needs camera access to capture and broadcast video over NDI.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>OpenBeam needs microphone access to capture and broadcast audio over NDI.</string>
+	<!--
+	  Capturing what this Mac is playing goes through a CoreAudio process tap,
+	  which macOS 15 grants a bundled app without asking. The key is here for
+	  the release where that stops being true: a tap without it would be denied
+	  with no prompt to grant it, and the symptom is silence rather than an
+	  error.
+	-->
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>OpenBeam captures this Mac's audio output so it can be sent over NDI and heard on the receiving machine.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>OpenBeam uses the local network to broadcast NDI video to other devices and to synchronize the clipboard with paired devices.</string>
 	<key>NSBonjourServices</key>
