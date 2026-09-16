@@ -11,8 +11,9 @@ on:
       appcast-artifact:
         description: >-
           Name of an artifact from the calling run holding a freshly generated
-          appcast.xml. When absent, the published appcast is carried over
-          unchanged so a docs-only deploy cannot erase the update feed.
+          appcast.xml, so a release publishes its feed without waiting for the
+          commit that records it. When absent, the feed tracked in the
+          repository is deployed unchanged.
         required: false
         type: string
   push:
@@ -71,23 +72,23 @@ jobs:
           name: ${{ inputs.appcast-artifact }}
           path: _site
 
-      - name: Carry over the published appcast
+      - name: Take the published appcast from the repository
         if: inputs.appcast-artifact == ''
         run: |
-          # A docs-only deploy replaces the whole site, so the feed has to be
-          # fetched back from the live site or every installed copy would stop
-          # seeing updates. A 404 means there is genuinely no feed yet; any other
-          # failure must stop the deploy rather than silently publish an empty
-          # feed over a good one.
-          source scripts/lib.sh
-          code=$(curl -sS -o _site/appcast.xml -w '%{http_code}' "$SITE_URL/appcast.xml" || echo 000)
-          case "$code" in
-            200) echo "Carried over $(grep -c '<item>' _site/appcast.xml) appcast items" ;;
-            404) rm -f _site/appcast.xml; echo "No published appcast yet — nothing to carry over" ;;
-            *)   rm -f _site/appcast.xml
-                 echo "::error::could not read the published appcast (HTTP $code); refusing to deploy a site that would drop it"
-                 exit 1 ;;
-          esac
+          # A docs-only deploy replaces the whole site, so it has to bring the
+          # feed with it or every installed copy would stop seeing updates.
+          #
+          # It used to fetch the live one back over HTTP, which has two ways of
+          # being wrong and no way of noticing either: the site is served
+          # through a CDN with a ten-minute cache, and when a release's push
+          # also touches site/** there are two deploys of the same commit, so
+          # the fetch can return the feed from before the release. Both were
+          # measured on v2.4.0. The copy in the repository is neither stale nor
+          # racing anything.
+          test -f site/appcast.xml \
+            || { echo "::error::site/appcast.xml is missing; refusing to deploy a site without an update feed"; exit 1; }
+          cp site/appcast.xml _site/appcast.xml
+          echo "Deploying the tracked appcast ($(grep -c '<item>' _site/appcast.xml) items)"
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

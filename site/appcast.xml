@@ -1,0 +1,39 @@
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>OpenBeam</title>
+        <item>
+            <title>2.4.0</title>
+            <pubDate>Wed, 16 Sep 2026 04:24:34 +0000</pubDate>
+            <link>https://openbeam.manuelvega.dev</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/manuelvegadev/OpenBeam/releases</sparkle:fullReleaseNotesLink>
+            <sparkle:version>2.4.0</sparkle:version>
+            <sparkle:shortVersionString>2.4.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.7</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/manuelvegadev/OpenBeam/releases/download/v2.4.0/OpenBeam-2.4.0.zip" length="6921753" type="application/octet-stream" sparkle:edSignature="8zfUhWjkqYJP1p8rnNBcfR8Aloq/481C4Cn4qDAc3NP/8dPstU1vUiMHgM3tLozDtEr4S8PXjkdsJ1XI3IUlDQ=="/>
+        </item>
+        <item>
+            <title>2.3.1</title>
+            <pubDate>Tue, 15 Sep 2026 20:16:30 +0000</pubDate>
+            <link>https://openbeam.manuelvega.dev</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/manuelvegadev/OpenBeam/releases</sparkle:fullReleaseNotesLink>
+            <sparkle:version>2.3.1</sparkle:version>
+            <sparkle:shortVersionString>2.3.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.7</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/manuelvegadev/OpenBeam/releases/download/v2.3.1/OpenBeam-2.3.1.zip" length="6877435" type="application/octet-stream" sparkle:edSignature="OVS/ARmCaw+BUd2ir7th7ISPaFyT2MVJsc6w1dD8ZEADuO0tJ/unMxMIG+tEO++dmlEAjXpawCIFFOL6hCe3Dw=="/>
+        </item>
+        <item>
+            <title>2.3.0</title>
+            <pubDate>Tue, 15 Sep 2026 20:02:57 +0000</pubDate>
+            <link>https://manuelvegadev.github.io/OpenBeam</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/manuelvegadev/OpenBeam/releases</sparkle:fullReleaseNotesLink>
+            <sparkle:version>2.3.0</sparkle:version>
+            <sparkle:shortVersionString>2.3.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.7</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/manuelvegadev/OpenBeam/releases/download/v2.3.0/OpenBeam-2.3.0.zip" length="6877567" type="application/octet-stream" sparkle:edSignature="xPymljQ0iO5HeuYTvL0mynhOzN5PrarRd42H5KHqOS1NXZxynpp/tdDVfPdJzH/bKSyEpJ8N7cdsf6t2fEJhCw=="/>
+        </item>
+    </channel>
+</rss>

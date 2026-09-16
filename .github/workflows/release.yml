@@ -45,6 +45,26 @@ jobs:
           path: build/appcast/appcast.xml
           retention-days: 1
 
+      # The feed is tracked, so that a later docs-only deploy publishes this
+      # release rather than whatever it can fetch back from the live site. The
+      # deploy below does not wait for this commit — it takes the artifact
+      # directly — so a failure here delays the next deploy's feed, not this
+      # release's.
+      - name: Record the appcast in the repository
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch --quiet origin main
+          git checkout --quiet -B main origin/main
+          cp build/appcast/appcast.xml site/appcast.xml
+          if git diff --quiet -- site/appcast.xml; then
+            echo "The tracked appcast already describes this release"
+            exit 0
+          fi
+          git add site/appcast.xml
+          git commit -q -m "chore(build): record the appcast for ${GITHUB_REF_NAME}"
+          git push --quiet origin main
+
       # The release notes are this version's section of CHANGELOG.md, not a
       # second text written somewhere else. Generated notes listed commit
       # subjects — the `chore(build)` bump and every refactor among them — which
