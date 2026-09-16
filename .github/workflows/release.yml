@@ -45,13 +45,20 @@ jobs:
           path: build/appcast/appcast.xml
           retention-days: 1
 
+      # The release notes are this version's section of CHANGELOG.md, not a
+      # second text written somewhere else. Generated notes listed commit
+      # subjects — the `chore(build)` bump and every refactor among them — which
+      # is noise to someone deciding whether to update.
+      - name: Take the release notes from the changelog
+        run: ./scripts/changelog-section.sh "${GITHUB_REF_NAME#v}" > build/release-notes.md
+
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             build/OpenBeam.dmg
             build/OpenBeam-*.zip
-          generate_release_notes: true
+          body_path: build/release-notes.md
 
   # Publishes the site with the appcast this release just produced. Sparkle
   # cannot see the new version until this runs.

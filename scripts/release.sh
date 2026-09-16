@@ -41,6 +41,12 @@ if [ "$BRANCH" != "main" ]; then
     [ "$reply" = "y" ] || [ "$reply" = "Y" ] || die "aborted"
 fi
 
+# The release notes come from CHANGELOG.md, so a missing section is a release
+# that would be published with nothing to read. Caught here rather than in CI,
+# where the tag is already pushed and the failure is irreversible.
+"$PROJECT_DIR/scripts/changelog-section.sh" "$VERSION" >/dev/null \
+    || die "write the CHANGELOG.md entry for $VERSION first"
+
 CURRENT="$(marketing_version)"
 COUNT="$(grep -c 'MARKETING_VERSION' "$PBXPROJ")"
 [ "$COUNT" -ge 1 ] || die "no MARKETING_VERSION found in project.pbxproj"
