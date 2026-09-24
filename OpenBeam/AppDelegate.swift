@@ -207,6 +207,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var audioSubmenu: NSMenu!
     private var ndiSourceSubmenu: NSMenu!
     private var listenSubmenu: NSMenu!
+    private var remoteScreenSubmenu: NSMenu!
     private var playbackSubmenu: NSMenu!
     private var statsSubmenu: NSMenu!
 
@@ -250,6 +251,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - App Lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        #if DEBUG
+        if RemoteScreenTestHarness.runIfRequested() { return }
+        #endif
         let saved = AppMode(rawValue: UserDefaults.standard.string(forKey: Self.modeDefaultsKey) ?? "") ?? .send
         modeState.withLock { $0 = saved }
         for mode in [AppMode.send, .receive] {
@@ -294,6 +298,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         clipSyncManager.onPairRequestPresented = { [weak self] in
             self?.statusItem.menu?.cancelTracking()
+        }
+        clipSyncManager.remoteScreen.onStateChanged = { [weak self] in
+            guard let self else { return }
+            self.updateRemoteScreenIndicator()
+            if self.settingsWindow?.isVisible == true { self.settingsModel?.refresh() }
         }
         clipSyncManager.start()
     }
@@ -517,6 +526,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         virtualCameraItem = NSMenuItem(title: "Virtual camera", action: nil, keyEquivalent: "")
         virtualCameraItem.target = self
         add(virtualCameraItem, to: menu, visibleIn: [.receive])
+
+        // Seeing and driving another Mac is independent of the camera tabs.
+        let remoteScreenItem = NSMenuItem(title: "Remote Screen", action: nil, keyEquivalent: "")
+        remoteScreenSubmenu = NSMenu()
+        remoteScreenSubmenu.delegate = self
+        remoteScreenItem.submenu = remoteScreenSubmenu
+        add(remoteScreenItem, to: menu)
 
         menu.addItem(.separator())
 
@@ -1271,6 +1287,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsWindow?.show()
     }
 
+    // MARK: - Remote screen
+
+    /// One "View" line per paired Mac, and, while another Mac controls this one,
+    /// who it is and a way to stop it.
+    private func updateRemoteScreenSubmenu(_ menu: NSMenu) {
+        menu.removeAllItems()
+        let remote = clipSyncManager.remoteScreen
+        let peers = clipSyncManager.pairedPeers.sorted { $0.displayName < $1.displayName }
+        if let hostID = remote.hostingPeerID {
+            let name = peers.first { $0.peerID == hostID }?.displayName ?? "Another Mac"
+            _ = addDisabledItem(to: menu, title: "\(name) is controlling this Mac")
+            let stop = NSMenuItem(title: "Stop Remote Control", action: #selector(stopRemoteControl(_:)), keyEquivalent: "")
+            stop.target = self
+            menu.addItem(stop)
+            menu.addItem(.separator())
+        }
+        if peers.isEmpty {
+            _ = addDisabledItem(to: menu, title: "No paired Macs")
+        }
+        let online = Set(clipSyncManager.discoveredPeers.map(\.peerID))
+        for peer in peers {
+            let item = NSMenuItem(title: "View \(peer.displayName)", action: #selector(viewRemoteScreen(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = peer.peerID
+            item.state = remote.isViewing(peer.peerID) ? .on : .off
+            item.isEnabled = online.contains(peer.peerID)
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+        let settings = NSMenuItem(title: "Remote Screen Settings…", action: #selector(openRemoteScreenSettings(_:)), keyEquivalent: "")
+        settings.target = self
+        menu.addItem(settings)
+    }
+
+    @objc private func viewRemoteScreen(_ sender: NSMenuItem) {
+        guard let peerID = sender.representedObject as? String,
+              let peer = clipSyncManager.pairedPeers.first(where: { $0.peerID == peerID }) else { return }
+        clipSyncManager.remoteScreen.view(peer)
+    }
+
+    @objc private func stopRemoteControl(_ sender: Any) {
+        clipSyncManager.remoteScreen.stopHosting()
+    }
+
+    @MainActor
+    @objc private func openRemoteScreenSettings(_ sender: Any) {
+        openSettings(sender)
+        settingsWindow?.select(.remoteScreen)
+    }
+
+    /// While another Mac controls this one, the menu bar icon says so in color:
+    /// the one place that is always on screen.
+    private func updateRemoteScreenIndicator() {
+        guard let button = statusItem.button else { return }
+        let hosting = clipSyncManager.remoteScreen.hostingPeerID != nil
+        button.contentTintColor = hosting ? .systemOrange : nil
+        button.setAccessibilityLabel(hosting ? "OpenBeam — this Mac is being controlled" : "OpenBeam")
+    }
+
     /// Brings up the update Sparkle already found in the background. Asking it
     /// to check again is what re-presents that update — it is still in hand, so
     /// nothing is downloaded twice.
@@ -1447,6 +1522,8 @@ extension AppDelegate: NSMenuDelegate {
             updatePlaybackSubmenu(menu)
         } else if menu === listenSubmenu {
             updateListenSubmenu(menu)
+        } else if menu === remoteScreenSubmenu {
+            updateRemoteScreenSubmenu(menu)
         }
     }
 

@@ -195,10 +195,15 @@ final class SettingsWindowController: NSObject, NSToolbarDelegate {
 
     @objc private func selectPane(_ sender: NSToolbarItem) {
         guard let pane = SettingsPane(rawValue: sender.itemIdentifier.rawValue) else { return }
+        select(pane)
+    }
+
+    /// Switches to `pane`, for a menu item that opens settings at a particular place.
+    func select(_ pane: SettingsPane) {
         self.pane = pane
         // Handling the action ourselves means AppKit does not move the
         // selection for us, and the highlight would stay on the pane we left.
-        window?.toolbar?.selectedItemIdentifier = sender.itemIdentifier
+        window?.toolbar?.selectedItemIdentifier = Self.identifier(for: pane)
         hosting?.rootView = makeRootView()
     }
 }

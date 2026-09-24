@@ -22,6 +22,8 @@ final class ClipSyncManager: NSObject, @unchecked Sendable {
     private let discovery: ClipSyncDiscovery
     private let clipboard: ClipboardPlugin
     private let share: SharePlugin
+    /// Remote screen's control plane rides on these sessions; see SCREEN-PROTOCOL.md.
+    let remoteScreen: RemoteScreenPlugin
     private let ioQueue = DispatchQueue(label: "com.openbeam.clipsync.io", qos: .utility)
 
     // MARK: - Public state
@@ -63,6 +65,10 @@ final class ClipSyncManager: NSObject, @unchecked Sendable {
         /// per peer, to prevent thrash. Keyed by connection because a dial that
         /// fails before its handshake has no peerID of its own to clear it by.
         var dialing: [ObjectIdentifier: String] = [:]
+        /// Payloads for one peer, waiting for its session's handshake.
+        var outbox: [String: [Data]] = [:]
+        /// Failed dials in a row per peer while payloads wait; bounds the retries.
+        var dialFailures: [String: Int] = [:]
     }
 
     // MARK: - Init
@@ -75,6 +81,7 @@ final class ClipSyncManager: NSObject, @unchecked Sendable {
                                  clipboardPlugin: clipboard,
                                  preferences: preferences,
                                  queue: ioQueue)
+        self.remoteScreen = RemoteScreenPlugin(identity: identity)
         super.init()
 
         // Wire plugins to broadcast through this manager.
@@ -83,6 +90,9 @@ final class ClipSyncManager: NSObject, @unchecked Sendable {
         }
         self.share.broadcast = { [weak self] payload in
             self?.broadcast(payloadData: payload)
+        }
+        self.remoteScreen.send = { [weak self] payload, peerID in
+            self?.send(payloadData: payload, to: peerID) ?? false
         }
 
         // Wire discovery callbacks.
@@ -142,6 +152,7 @@ final class ClipSyncManager: NSObject, @unchecked Sendable {
     /// User chose to forget a paired peer.
     func unpair(peerID: String) {
         identity.remove(peerID: peerID)
+        remoteScreen.peerForgotten(peerID)
 
         // Tear down the session connection if any.
         let session: ClipSyncConnection? = lock.withLock { $0.sessions.removeValue(forKey: peerID) }
@@ -201,6 +212,25 @@ final class ClipSyncManager: NSObject, @unchecked Sendable {
         return NWParameters(tls: nil, tcp: tcp)
     }
 
+    /// Encrypt + send `payloadData` to one paired peer, opening its session if
+    /// there is none and holding the payload until the handshake completes.
+    /// Not gated on `isEnabled`: that switch is about the clipboard, and remote
+    /// screen has permissions of its own. False when the peer cannot be reached.
+    private func send(payloadData: Data, to peerID: String) -> Bool {
+        if let session = (lock.withLock { $0.sessions[peerID] }) {
+            return session.sendEncrypted(payload: payloadData)
+        }
+        guard let peer = identity.paired(peerID: peerID),
+              lock.withLock({ $0.discoveredPeers.contains { $0.peerID == peerID } })
+        else { return false }
+        lock.withLock { state in
+            // A handful at most: control messages, not a stream.
+            state.outbox[peerID, default: []] = Array((state.outbox[peerID] ?? []).suffix(7)) + [payloadData]
+        }
+        openSessionIfNeeded(for: peer)
+        return true
+    }
+
     /// Encrypt + send `payloadData` (plaintext JSON bytes) on every paired+ready connection.
     /// Lazily opens connections to known paired peers we have a discovered endpoint for.
     private func broadcast(payloadData: Data) {
@@ -234,9 +264,13 @@ extension ClipSyncManager: ClipSyncConnectionDelegate {
                 s.sessions[peerHello.peerID] = c
                 s.pairing.removeValue(forKey: ObjectIdentifier(c))
                 s.dialing.removeValue(forKey: ObjectIdentifier(c))
+                s.dialFailures.removeValue(forKey: peerHello.peerID)
                 return prev
             }
             oldSession?.cancel()
+
+            let queued: [Data] = lock.withLock { $0.outbox.removeValue(forKey: peerHello.peerID) ?? [] }
+            for payload in queued { c.sendEncrypted(payload: payload) }
 
             // Send a snapshot of the current text clipboard (if any), only while
             // syncing: the other side can open a session with this one either way.
@@ -350,6 +384,9 @@ extension ClipSyncManager: ClipSyncConnectionDelegate {
         case "share.begin", "share.chunk", "share.end", "share.cancel":
             guard isEnabled else { return }
             share.handleInbound(payloadData: data, kind: kind)
+        case "screen.request", "screen.offer", "screen.decline", "screen.stop", "screen.displays", "screen.select":
+            guard let peerID = c.peerID else { return }
+            remoteScreen.handleInbound(data, kind: kind, from: peerID)
         case "ping":
             if let ping = try? ClipSyncJSON.decoder.decode(PingPayload.self, from: data) {
                 let pong = PingPayload(kind: "pong", nonce: ping.nonce)
@@ -368,13 +405,27 @@ extension ClipSyncManager: ClipSyncConnectionDelegate {
         if let error {
             print("[OpenBeam] ClipSync connection closed with error: \(error)")
         }
-        lock.withLock { state in
+        let retry: String? = lock.withLock { state in
             let dialedPeer = state.dialing.removeValue(forKey: ObjectIdentifier(c))
             let peerID = c.peerID ?? dialedPeer
             state.pairing.removeValue(forKey: ObjectIdentifier(c))
             if let peerID, state.sessions[peerID] === c {
                 state.sessions.removeValue(forKey: peerID)
             }
+            // A dial that failed with payloads waiting tries again, a few times:
+            // the first attempt can race a peer that is restarting.
+            guard let dialedPeer, c.peerID == nil, state.outbox[dialedPeer]?.isEmpty == false else { return nil }
+            let failures = (state.dialFailures[dialedPeer] ?? 0) + 1
+            state.dialFailures[dialedPeer] = failures
+            guard failures <= 3 else {
+                state.outbox.removeValue(forKey: dialedPeer)
+                state.dialFailures.removeValue(forKey: dialedPeer)
+                return nil
+            }
+            return dialedPeer
+        }
+        if let retry, let peer = identity.paired(peerID: retry) {
+            ioQueue.asyncAfter(deadline: .now() + 1) { [weak self] in self?.openSessionIfNeeded(for: peer) }
         }
         // A pair that ended without an answer: say so rather than leave the
         // panel spinning. Accept and reject already resolved their own panel,

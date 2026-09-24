@@ -8,13 +8,14 @@
 import SwiftUI
 
 enum SettingsPane: String, Hashable, CaseIterable {
-    case general, updates, clipboard, about
+    case general, updates, clipboard, remoteScreen, about
 
     var label: (title: String, symbol: String) {
         switch self {
         case .general:   ("General", "gearshape")
         case .updates:   ("Updates", "arrow.down.circle")
         case .clipboard: ("Clipboard", "doc.on.clipboard")
+        case .remoteScreen: ("Remote Screen", "display")
         case .about:     ("About", "info.circle")
         }
     }
@@ -49,6 +50,7 @@ struct SettingsView: View {
             case .general:   GeneralPane(model: model)
             case .updates:   UpdatesPane(model: model)
             case .clipboard: ClipboardPane(model: model)
+            case .remoteScreen: RemoteScreenPane(model: model)
             case .about:     AboutPane(model: model)
             }
         }
@@ -305,6 +307,112 @@ private struct ClipboardPane: View {
         case "linux": "Linux"
         default: os
         }
+    }
+}
+
+// MARK: - Remote screen
+
+private struct RemoteScreenPane: View {
+
+    let model: SettingsModel
+
+    var body: some View {
+        Form {
+            Section {
+                if model.pairedPeers.isEmpty {
+                    Text("Pair a Mac in Clipboard first.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(model.pairedPeers, id: \.peerID) { peer in
+                        Toggle(isOn: Binding(
+                            get: { model.remoteScreenAllowedPeers.contains(peer.peerID) },
+                            set: { model.setRemoteScreenAllowed($0, for: peer) }
+                        )) {
+                            Text(peer.displayName)
+                            Text("Can see this screen and use its keyboard and mouse.")
+                        }
+                    }
+                }
+            } header: {
+                Text("Allow control of this Mac")
+            } footer: {
+                footnote("Off for every Mac until you turn it on here; pairing alone never allows it. While another Mac is in control, the OpenBeam icon in the menu bar turns orange.")
+            }
+
+            Section {
+                permissionRow("Screen Recording", granted: model.remoteScreenHasScreenRecording,
+                              action: model.requestScreenRecording)
+                permissionRow("Accessibility", granted: model.remoteScreenHasAccessibility,
+                              action: model.requestAccessibility)
+            } header: {
+                Text("Permissions")
+            } footer: {
+                footnote("A Mac being controlled needs both. A Mac viewing another needs Accessibility to send the shortcuts other apps have claimed.")
+            }
+
+            Section {
+                Toggle(isOn: Binding(
+                    get: { model.remoteScreenSendsShortcuts },
+                    set: { model.setRemoteScreenSendsShortcuts($0) }
+                )) {
+                    Text("Send system shortcuts")
+                    Text("⌘Tab, Spotlight, Raycast and every other global shortcut go to the other Mac while its window has the focus.")
+                }
+
+                Toggle(isOn: Binding(
+                    get: { model.remoteScreenSendsMediaKeys },
+                    set: { model.setRemoteScreenSendsMediaKeys($0) }
+                )) {
+                    Text("Send media keys")
+                    Text("Volume, brightness and playback keys control the other Mac instead of this one.")
+                }
+
+                Toggle(isOn: Binding(
+                    get: { model.remoteScreenRequestsRetina },
+                    set: { model.setRemoteScreenRequestsRetina($0) }
+                )) {
+                    Text("Full Retina resolution")
+                    Text("Every pixel of the other Mac's HiDPI desktop, drawn without rescaling. About three times the data; applies to the next screen you open.")
+                }
+
+                Toggle("Open in full screen", isOn: Binding(
+                    get: { model.remoteScreenOpensFullScreen },
+                    set: { model.setRemoteScreenOpensFullScreen($0) }
+                ))
+
+                Toggle(isOn: Binding(
+                    get: { model.remoteScreenShowsStats },
+                    set: { model.setRemoteScreenShowsStats($0) }
+                )) {
+                    Text("Show statistics")
+                    Text("Frame rate and latency over the picture.")
+                }
+            } header: {
+                Text("When viewing another Mac")
+            } footer: {
+                footnote("⌃⌥⌘R gives the keyboard back to this Mac, ⌃⌥⌘F toggles full screen and ⌃⌥⌘W closes the viewer.")
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private func permissionRow(_ title: String, granted: Bool, action: @escaping () -> Void) -> some View {
+        LabeledContent(title) {
+            if granted {
+                Text("Allowed").foregroundStyle(.secondary)
+            } else {
+                Button("Allow…", action: action)
+            }
+        }
+    }
+
+    /// Leading-aligned, as the Clipboard pane's footer explains.
+    private func footnote(_ text: String) -> some View {
+        Text(text)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

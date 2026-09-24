@@ -46,6 +46,16 @@ final class SettingsModel {
     private(set) var discoveredPeers: [DiscoveredPeer] = []
     private(set) var pairedPeers: [PairedPeer] = []
 
+    // Remote screen
+    private(set) var remoteScreenAllowedPeers: Set<String> = []
+    private(set) var remoteScreenHasScreenRecording = false
+    private(set) var remoteScreenHasAccessibility = false
+    private(set) var remoteScreenSendsShortcuts = true
+    private(set) var remoteScreenSendsMediaKeys = false
+    private(set) var remoteScreenOpensFullScreen = true
+    private(set) var remoteScreenShowsStats = false
+    private(set) var remoteScreenRequestsRetina = true
+
     var version: String { AppDelegate.appVersion }
 
     /// False when the app runs from the DMG or a build directory, where neither
@@ -89,6 +99,15 @@ final class SettingsModel {
         discoveredPeers = clipSync.discoveredPeers
             .filter { !pairedIDs.contains($0.peerID) }
             .sorted { $0.displayName < $1.displayName }
+
+        remoteScreenAllowedPeers = Set(paired.map(\.peerID).filter(RemoteScreenPreferences.isAllowed))
+        remoteScreenHasScreenRecording = CGPreflightScreenCaptureAccess()
+        remoteScreenHasAccessibility = InputInjector.hasPermission(prompt: false)
+        remoteScreenSendsShortcuts = RemoteScreenPreferences.capturesSystemShortcuts
+        remoteScreenSendsMediaKeys = RemoteScreenPreferences.sendsMediaKeys
+        remoteScreenOpensFullScreen = RemoteScreenPreferences.opensFullScreen
+        remoteScreenShowsStats = RemoteScreenPreferences.showsStats
+        remoteScreenRequestsRetina = RemoteScreenPreferences.requestsRetina
     }
 
     // MARK: - General
@@ -163,5 +182,56 @@ final class SettingsModel {
 
     func forget(_ peer: PairedPeer) {
         clipSync.unpair(peerID: peer.peerID)
+    }
+
+    // MARK: - Remote screen
+
+    /// Turning a peer off ends a session it is running right now.
+    func setRemoteScreenAllowed(_ allowed: Bool, for peer: PairedPeer) {
+        RemoteScreenPreferences.setAllowed(allowed, peerID: peer.peerID)
+        clipSync.remoteScreen.accessChanged(for: peer.peerID)
+        refresh()
+    }
+
+    func setRemoteScreenSendsShortcuts(_ on: Bool) {
+        RemoteScreenPreferences.capturesSystemShortcuts = on
+        refresh()
+    }
+
+    func setRemoteScreenSendsMediaKeys(_ on: Bool) {
+        RemoteScreenPreferences.sendsMediaKeys = on
+        refresh()
+    }
+
+    func setRemoteScreenOpensFullScreen(_ on: Bool) {
+        RemoteScreenPreferences.opensFullScreen = on
+        refresh()
+    }
+
+    func setRemoteScreenRequestsRetina(_ on: Bool) {
+        RemoteScreenPreferences.requestsRetina = on
+        refresh()
+    }
+
+    func setRemoteScreenShowsStats(_ on: Bool) {
+        RemoteScreenPreferences.showsStats = on
+        refresh()
+    }
+
+    /// Asks for Screen Recording — the system prompt adds OpenBeam to the list —
+    /// and opens the pane where it is switched on.
+    func requestScreenRecording() {
+        _ = CGRequestScreenCaptureAccess()
+        openPrivacyPane("Privacy_ScreenCapture")
+    }
+
+    func requestAccessibility() {
+        _ = InputInjector.hasPermission(prompt: true)
+        openPrivacyPane("Privacy_Accessibility")
+    }
+
+    private func openPrivacyPane(_ anchor: String) {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)") else { return }
+        NSWorkspace.shared.open(url)
     }
 }
