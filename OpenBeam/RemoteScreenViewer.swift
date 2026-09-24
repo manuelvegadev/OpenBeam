@@ -696,6 +696,14 @@ final class RemoteScreenWindowController: NSWindowController, NSWindowDelegate {
         onClose?()
     }
 
+    /// Full screen here is the other Mac's screen edge to edge, its own menu bar
+    /// at the top of the picture. This Mac's menu bar and title bar, which slide
+    /// down when the pointer reaches that edge, would sit over it and take the
+    /// clicks meant for it, so in full screen they stay hidden, the Dock too.
+    func window(_ window: NSWindow, willUseFullScreenPresentationOptions proposedOptions: NSApplication.PresentationOptions = []) -> NSApplication.PresentationOptions {
+        [.fullScreen, .hideDock, .hideMenuBar]
+    }
+
     /// Input stops reaching this window, so nothing may stay held on the host.
     func windowDidResignKey(_ notification: Notification) {
         input?.releaseAll()
