@@ -20,6 +20,10 @@ final class AudioController: NSObject, @unchecked Sendable {
 
     var onAudio: ((AVAudioPCMBuffer) -> Void)?
 
+    /// Where a block that took too long is counted. Set by the one place that
+    /// wires the pipeline; nil in any other use of this class.
+    var health: AudioHealth?
+
     // Most recent peak sample magnitude (linear 0…1). Written on the audio
     // tap thread, read on main.
     private let peakLock = OSAllocatedUnfairLock(initialState: Float(0))
@@ -79,9 +83,16 @@ final class AudioController: NSObject, @unchecked Sendable {
 
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
             guard let self else { return }
+            // The whole block is timed, not just our part of it: what matters
+            // to the device is when this thread comes back, and everything
+            // downstream of here runs on it.
+            let start = DispatchTime.now().uptimeNanoseconds
             let peak = AudioLevel.peak(buffer)
             self.peakLock.withLock { $0 = peak }
             self.onAudio?(buffer)
+            self.health?.captured(frames: Int(buffer.frameLength),
+                                  sampleRate: format.sampleRate,
+                                  work: Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000_000)
         }
 
         do {

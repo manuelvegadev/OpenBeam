@@ -25,6 +25,11 @@ final class AudioOutputPlayer: @unchecked Sendable {
     private let peakLock = OSAllocatedUnfairLock(initialState: Float(0))
     var currentPeak: Float { peakLock.withLock { $0 } }
 
+    /// Where a cushion that ran dry is counted. Set only on the player that
+    /// carries the received stream: the monitor has one of these too, and its
+    /// own underruns are the monitor's business, not the pipeline's.
+    var health: AudioHealth?
+
     private let deviceLock = OSAllocatedUnfairLock<AudioDevices.Device?>(initialState: nil)
     /// The device audio is going to, or nil when nothing is playing.
     var currentDevice: AudioDevices.Device? { deviceLock.withLock { $0 } }
@@ -117,6 +122,7 @@ final class AudioOutputPlayer: @unchecked Sendable {
     // MARK: - Engine
 
     private func rebuild(sampleRate: Double, channels: Int) {
+        let wasRunning = engine != nil
         teardown()
         guard let target else {
             formatLock.withLock { $0.rebuilding = false }
@@ -146,10 +152,16 @@ final class AudioOutputPlayer: @unchecked Sendable {
             AudioDevices.setDevice(device.id, on: unit)
         }
 
+        // A rebuild mid-stream is a gap of its own, however short. The
+        // first build of a session is not: there was nothing playing to
+        // interrupt.
+        if wasRunning { health?.rebuilt() }
+
         let ring = RingBuffer(channels: channels,
                               capacity: Int(sampleRate * 1.0),
                               target: Int(sampleRate * Self.targetLatency),
-                              maximum: Int(sampleRate * Self.maximumLatency))
+                              maximum: Int(sampleRate * Self.maximumLatency),
+                              health: health)
 
         let source = AVAudioSourceNode(format: format) { silence, _, frameCount, audioBufferList in
             let filled = ring.read(into: UnsafeMutableAudioBufferListPointer(audioBufferList),
@@ -261,6 +273,7 @@ private final class RingBuffer: @unchecked Sendable {
     private let target: Int
     private let maximum: Int
     private let storage: UnsafeMutablePointer<Float>
+    private let health: AudioHealth?
 
     /// Frame counters rather than offsets: the difference between them is how
     /// much audio is in the buffer, with no empty-or-full ambiguity to resolve.
@@ -268,7 +281,8 @@ private final class RingBuffer: @unchecked Sendable {
     /// Touched only by the reader, so it needs no protection.
     private var isPrimed = false
 
-    init(channels: Int, capacity: Int, target: Int, maximum: Int) {
+    init(channels: Int, capacity: Int, target: Int, maximum: Int, health: AudioHealth?) {
+        self.health = health
         self.channels = max(channels, 1)
         self.target = target
         self.maximum = maximum
@@ -319,6 +333,7 @@ private final class RingBuffer: @unchecked Sendable {
         if available > maximum {
             read += available - target
             available = target
+            health?.droppedForDrift()
         }
 
         if !isPrimed {
@@ -351,7 +366,14 @@ private final class RingBuffer: @unchecked Sendable {
         read += count
         // Running dry means the cushion is gone; filling it again costs one
         // quiet moment now instead of a click on every block from here on.
-        if count < frames { isPrimed = false }
+        //
+        // Counted here rather than at the `isPrimed` check above, because this
+        // is the branch where the speaker is handed silence it was not
+        // expecting — which is the thing a listener hears.
+        if count < frames {
+            isPrimed = false
+            health?.ranDry()
+        }
 
         publish(read: read)
         return count

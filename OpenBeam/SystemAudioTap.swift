@@ -23,6 +23,9 @@ final class SystemAudioTap: @unchecked Sendable {
     /// `NDISender` copies out of it synchronously.
     var onAudio: ((UnsafePointer<AudioBufferList>, AVAudioFormat) -> Void)?
 
+    /// Where a block that took too long is counted, as in `AudioController`.
+    var health: AudioHealth?
+
     private let peakLock = OSAllocatedUnfairLock(initialState: Float(0))
     var currentPeak: Float { peakLock.withLock { $0 } }
 
@@ -161,10 +164,18 @@ final class SystemAudioTap: @unchecked Sendable {
             // one buffer however many channels it carries.
 
             var tapList = AudioBufferList(mNumberBuffers: 1, mBuffers: buffers[tapBuffer])
+            let start = DispatchTime.now().uptimeNanoseconds
             withUnsafePointer(to: &tapList) { list in
                 self.peakLock.withLock { $0 = AudioLevel.peak(list) }
                 self.onAudio?(list, format)
             }
+            // The tap is interleaved, so its frames are the buffer's bytes
+            // divided by one frame across every channel.
+            let frames = Int(tapList.mBuffers.mDataByteSize)
+                / (Int(tapChannels) * MemoryLayout<Float>.size)
+            self.health?.captured(frames: frames,
+                                  sampleRate: format.sampleRate,
+                                  work: Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000_000)
         }
         guard status == noErr, let procID else {
             print("[OpenBeam] AudioDeviceCreateIOProcIDWithBlock failed for \(device.name)")

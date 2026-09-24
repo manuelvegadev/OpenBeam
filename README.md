@@ -79,6 +79,37 @@ what it captures: you go on hearing what you are sending. Each tab remembers its
 Send starts at the system microphone, Receive at `None`, so a machine only puts its audio on the
 network once you have said so.
 
+The **headphones button** beside the level meter plays what the meter is showing out of this
+machine, without changing what is sent or where **Play audio on** plays: on Send that is the
+capture going out, on Receive the stream coming in. It is how you tell *where* audio that
+arrives distorted went wrong — if the capture already sounds broken on the machine it is
+captured on, the network and the NDI audio driver are not the cause. Use headphones when what
+you are monitoring is a microphone. It is off at launch, switching tabs turns it off, and it
+is greyed out when the stream is already coming out of a speaker here.
+
+While it plays, a **`Monitoring on`** line appears under `Play audio on` saying which speakers
+it is using, and lets you change them. It has its own choice because the two questions differ:
+`Play audio on` is where a stream plays for as long as it runs, and on the machine sitting in
+the call the right answer to that is `None` — so the monitor would otherwise fall back to the
+system default output, which on a Mac whose output is being captured is a virtual device that
+goes nowhere. Left alone it follows `Play audio on`, then the system default.
+
+### When the audio breaks
+
+OpenBeam counts what goes wrong in its own audio path, continuously, on both machines. Three
+stages, each reporting what only it can see:
+
+| Stage | Counts | If it fires |
+|---|---|---|
+| **Capture** | blocks the audio thread took longer to handle than they last, and the time spent inside libndi | it is already broken before it leaves — not the network, not the driver |
+| **Network** | gaps between arriving blocks longer than the playback cushion, and format changes mid-stream | the stream stalled or changed shape on the wire |
+| **Playback** | the cushion running dry, blocks thrown away to catch up on drift, engine rebuilds | it arrived intact and broke on the way to the speakers |
+
+When something fires, a line appears at the top of the menu naming the stage, and macOS shows
+a notification — because this is a fault that happens mid-call with the menu closed. Pressing
+the line starts the count again, which is how you ask "is it still happening". The detail is
+under `Statistics` → `Audio`, and the window is the last minute.
+
 ### The pair in a video call
 
 The case this is shaped around: you are at machine **A**, the call is on machine **B**.

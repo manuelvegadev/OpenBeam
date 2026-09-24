@@ -57,6 +57,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let ndiReceiver = NDIReceiver()
     private let ndiAudioReceiver = NDIAudioReceiver()
     private let audioPlayer = AudioOutputPlayer()
+    private let audioMonitor = AudioMonitor()
+    private let audioHealth = AudioHealth()
+    private let audioHealthNotifier = AudioHealthNotifier()
+    /// Shown at the top of the menu when the audio path has been dropping
+    /// blocks, and hidden the rest of the time — the same shape as the update
+    /// notice above it, and for the same reason: a line that is always there
+    /// saying "fine" is a line nobody reads when it stops saying it.
+    private var audioHealthItem: NSMenuItem!
+    /// Runs whether or not the menu is open. The fault this watches for
+    /// happens in the middle of a call, which is exactly when nothing else in
+    /// this app is running.
+    private var healthTimer: Timer?
+    private var statsAudioItems: [NSMenuItem] = []
     private let clipSyncManager = ClipSyncManager()
     private let netMonitor = NetTrafficMonitor()
 
@@ -100,6 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mode == .send ? "audioSource" : "audioSourceReceive"
     }
     private static let playbackOutputDefaultsKey = "playbackOutput"
+    private static let monitorOutputDefaultsKey = "monitorOutput"
     private static let listenSourceDefaultsKey = "listenSource"
     /// Stored for "send nothing", which a missing key cannot mean: that is a
     /// machine that has never chosen, and it sends its microphone.
@@ -123,6 +137,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var sourceItem: NSMenuItem!
     private var listenItem: NSMenuItem!
     private var playbackItem: NSMenuItem!
+    /// Where the monitor is playing. Shown only while it is: see `refreshMonitor`.
+    private var monitorItem: NSMenuItem!
     /// The width every row starts from; the menu grows past it only when a text
     /// item needs more, and the rows then follow.
     private static let baseWidth: CGFloat = 336
@@ -133,6 +149,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let contentInsetX: CGFloat = 14
     /// Vertical padding around the preview and the meter.
     private static let contentInsetY: CGFloat = 8
+    /// The monitor button beside the meter, and the gap it keeps from it.
+    private static let monitorButtonSize: CGFloat = 16
+    private static let monitorButtonGap: CGFloat = 8
     /// The widest the menu is allowed to get. Past this a source name is
     /// trimmed rather than stretching the menu across the screen.
     private static let maxWidth: CGFloat = 460
@@ -210,10 +229,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var remoteScreenSubmenu: NSMenu!
     private var keepAwakeSubmenu: NSMenu!
     private var playbackSubmenu: NSMenu!
+    private var monitorSubmenu: NSMenu!
     private var statsSubmenu: NSMenu!
 
     private var meterTrackLayer: CALayer!
     private var meterFillLayer: CALayer!
+    /// The button beside the meter, which plays what the meter is showing.
+    private var monitorButton: NSButton!
+    /// Off at launch, and not remembered anywhere. Monitoring is something you
+    /// do while chasing a problem, and a machine that comes up playing its own
+    /// microphone out of its speakers is not a good surprise.
+    private var isMonitoring = false
+    /// What the button was last drawn as. `refreshMonitorButton` runs on the
+    /// stats tick, and a new symbol image a second would be a redraw an hour
+    /// for an answer that changes when the user changes something.
+    private var monitorLook: MonitorLook?
+
+    private enum MonitorLook { case unavailable, ready, playing }
     private var levelTimer: Timer?
     private var displayedLevel: Double = 0
     private var meterBand: MeterBand = .normal
@@ -263,6 +295,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             audioSources[mode] = Self.audioSource(for: stored)
         }
         playbackTarget = Self.outputTarget(for: UserDefaults.standard.string(forKey: Self.playbackOutputDefaultsKey))
+        selectedMonitorOutput = Self.outputTarget(for: UserDefaults.standard.string(forKey: Self.monitorOutputDefaultsKey))
         selectedListenSource = UserDefaults.standard.string(forKey: Self.listenSourceDefaultsKey)
         buildStatusItem()
         configurePipeline()
@@ -312,10 +345,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self, self.settingsWindow?.isVisible == true else { return }
             self.settingsModel?.refresh()
         }
+        startHealthTimer()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         KeepAwake.shared.shutdown()
+        healthTimer?.invalidate()
+        healthTimer = nil
         stopStatsTimer()
         stopLevelTimer()
         cameraController.stop()
@@ -325,6 +361,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ndiReceiver.stop()
         ndiAudioReceiver.stop()
         audioPlayer.stop()
+        audioMonitor.stop()
         ndiFinder.stop()
         clipSyncManager.stop()
         netMonitor.stop()
@@ -397,6 +434,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         addRow(headerView, to: menu)
 
+        // --- Audio health notice ---
+        // Hidden until there is something to say. Pressing it starts the
+        // count again, which is what you want the moment you have read it:
+        // the question is never "has it ever broken" but "is it breaking now".
+        audioHealthItem = NSMenuItem(title: "",
+                                     action: #selector(resetAudioHealth(_:)),
+                                     keyEquivalent: "")
+        audioHealthItem.target = self
+        audioHealthItem.toolTip = "Click to start counting again"
+        audioHealthItem.isHidden = true
+        menu.addItem(audioHealthItem)
+
         // --- Mode tabs ---
         // A custom view rather than two menu items: clicking a menu item closes
         // the menu, and switching modes with the preview in sight is the point.
@@ -441,6 +490,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         addRow(container, to: menu)
 
         // --- Audio level meter ---
+        //
+        // The meter and, beside it, the way to hear what it is showing. A bar
+        // moving says audio is arriving; it does not say it is arriving
+        // intact, and that is the question a stream that has gone robotic
+        // raises. The button is here rather than in a submenu because the
+        // answer is worth having while the bar is in front of you.
         let meterHeight: CGFloat = 8
         let containerHeight: CGFloat = 18
         let meterContainer = MenuRowView(frame: NSRect(x: 0, y: 0, width: Self.baseWidth, height: containerHeight))
@@ -465,9 +520,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         meterContainer.layer?.addSublayer(meterTrackLayer)
 
+        let monitorSize = Self.monitorButtonSize
+        let monitor = NSButton(frame: NSRect(x: Self.baseWidth - Self.contentInsetX - monitorSize,
+                                             y: (containerHeight - monitorSize) / 2,
+                                             width: monitorSize, height: monitorSize))
+        monitor.bezelStyle = .inline
+        monitor.isBordered = false
+        monitor.target = self
+        monitor.action = #selector(toggleAudioMonitor(_:))
+        monitorButton = monitor
+        meterContainer.addSubview(monitor)
+        refreshMonitor()
+
         meterContainer.layoutHandler = { [weak self] bounds in
             guard let self, let track = self.meterTrackLayer else { return }
-            track.frame.size.width = bounds.width - 2 * Self.contentInsetX
+            monitor.frame.origin.x = bounds.width - Self.contentInsetX - monitorSize
+            track.frame.size.width = max(0, bounds.width - 2 * Self.contentInsetX
+                                            - Self.monitorButtonGap - monitorSize)
             // The fill is a fraction of the track, redrawn on the next tick.
             self.meterFillLayer.frame.size.width = min(self.meterFillLayer.frame.width, track.frame.width)
         }
@@ -531,6 +600,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         playbackItem.submenu = playbackSubmenu
         add(playbackItem, to: menu)
 
+        // Where the monitor is playing, which is only a question while it is
+        // playing. Hidden the rest of the time rather than sitting there
+        // saying nothing: this menu already carries four audio choices, and a
+        // fifth that matters for one minute in a hundred is a fifth too many.
+        //
+        // Deliberately not registered with `itemVisibility`: that answers
+        // "which tab", and this line is answered by whether the button is lit.
+        // Two owners of one `isHidden` is how a row comes back from a tab
+        // switch that nobody asked to see it.
+        monitorItem = NSMenuItem(title: "Monitoring on", action: nil, keyEquivalent: "")
+        monitorSubmenu = NSMenu()
+        monitorSubmenu.delegate = self
+        monitorItem.submenu = monitorSubmenu
+        monitorItem.isHidden = true
+        menu.addItem(monitorItem)
+
         virtualCameraItem = NSMenuItem(title: "Virtual camera", action: nil, keyEquivalent: "")
         virtualCameraItem.target = self
         add(virtualCameraItem, to: menu, visibleIn: [.receive])
@@ -559,6 +644,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statsDataRateItem = addDisabledItem(to: statsSubmenu, title: "—")
         statsFramesSentItem = addDisabledItem(to: statsSubmenu, title: "Sent: 0")
         statsDroppedItem = addDisabledItem(to: statsSubmenu, title: "Dropped: 0")
+
+        // The three stages audio passes through, each reporting what only it
+        // can see. Always present, saying "OK" when there is nothing wrong:
+        // in here, unlike in the menu above, the absence of a fault is the
+        // answer somebody came looking for.
+        statsSubmenu.addItem(.separator())
+        statsSubmenu.addItem(.sectionHeader(title: "Audio"))
+        statsAudioItems = (0..<4).map { _ in addDisabledItem(to: statsSubmenu, title: "—") }
 
         statsItem.submenu = statsSubmenu
         menu.addItem(statsItem)
@@ -625,6 +718,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Wires the three frame sources to their sinks. Nothing is started here —
     /// `apply(mode:)` decides which half of the pipeline runs.
     private func configurePipeline() {
+        // Every stage reports to the same counter, which is what lets the
+        // culprit be named rather than guessed at. The monitor's own player is
+        // deliberately left out: its underruns are its own.
+        audioController.health = audioHealth
+        systemAudioTap.health = audioHealth
+        ndiSender.health = audioHealth
+        audioPlayer.health = audioHealth
+
         cameraController.onFrame = { [weak self] pixelBuffer in
             guard let self else { return }
 
@@ -637,21 +738,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.present(image)
         }
 
+        // Each capture goes to the wire and, when the monitor is on, to this
+        // machine's own output as well. The monitor is handed the same buffer
+        // list the sender is, rather than a copy taken somewhere further down:
+        // what it plays has to be what left, or it is answering a different
+        // question from the one that was asked.
         audioController.onAudio = { [weak self] buffer in
-            self?.ndiSender.send(audioBuffer: buffer)
+            guard let self else { return }
+            self.ndiSender.send(audioBuffer: buffer)
+            self.audioMonitor.play(buffer.audioBufferList, format: buffer.format)
         }
 
         // The other thing that can fill the same stream. Only one of the two
         // is ever running — `startAudioCapture` sees to that — so they never
         // reach the sender at once.
         systemAudioTap.onAudio = { [weak self] bufferList, format in
-            self?.ndiSender.send(audio: bufferList, format: format)
+            guard let self else { return }
+            self.ndiSender.send(audio: bufferList, format: format)
+            self.audioMonitor.play(bufferList, format: format)
         }
 
         // In Receive the audio comes off the network instead, and goes to a
         // speaker on this machine rather than to NDI.
         ndiAudioReceiver.onAudio = { [weak self] audio in
-            self?.audioPlayer.play(audio)
+            guard let self else { return }
+            self.audioHealth.received(frames: audio.frameCount,
+                                      sampleRate: audio.sampleRate,
+                                      channels: audio.channelCount)
+            self.audioPlayer.play(audio)
         }
 
         // In Receive the frames come off the network instead, at proxy
@@ -713,6 +827,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         UserDefaults.standard.set(newMode.rawValue, forKey: Self.modeDefaultsKey)
         modeControl?.selectedSegment = (newMode == .send) ? 0 : 1
 
+        // Monitoring does not follow a tab switch. What it plays is decided by
+        // the tab — the capture on one, the received stream on the other — and
+        // a microphone that starts coming out of the speakers because someone
+        // looked at the other tab is the one surprise worth ruling out here.
+        isMonitoring = false
+
         for (item, modes) in itemVisibility { item.isHidden = !modes.contains(newMode) }
 
         // The counters describe one pipeline or the other, never a mix.
@@ -754,6 +874,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// not started.
     private func reconcile() {
         startAudioCapture()
+        syncAudioMonitor()
         syncNDIPublishing()
         syncReceiveSession()
         syncAudioPlayback()
@@ -783,6 +904,71 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private enum MonitoredAudio { case capture, received }
+
+    /// What the monitor button offers to play, which is the audio the meter is
+    /// showing: the capture this machine is putting on the network — the audio
+    /// that ends up at the virtual microphone at the other end — or the stream
+    /// it is taking off it, which is what its own virtual microphone is being
+    /// given.
+    ///
+    /// Nil when there is nothing to hear, and nil when it is already coming out
+    /// of a speaker here: a second engine on the same audio would only play it
+    /// twice.
+    private var monitoredAudio: MonitoredAudio? {
+        switch mode {
+        case .send:
+            return publishesAudio ? .capture : nil
+        case .receive:
+            guard playbackTarget == nil else { return nil }
+            return listenSource != nil ? .received : nil
+        }
+    }
+
+    private var monitorsCapture: Bool { isMonitoring && monitoredAudio == .capture }
+    private var monitorsReceived: Bool { isMonitoring && monitoredAudio == .received }
+
+    /// Where the monitor plays, once the user has said.
+    ///
+    /// Its own setting rather than a reuse of "Play audio on", because the two
+    /// answer different questions: that one is where a stream plays for as
+    /// long as it runs, and on the machine sitting in the call the right
+    /// answer to it is "nowhere" — playing the far end into that room would
+    /// only put it back into the meeting. Monitoring still has to come out
+    /// somewhere, and on exactly that machine it could not: a Mac whose output
+    /// is being tapped is a Mac whose default output is a virtual device, and
+    /// the monitor played into it and was never heard.
+    private var selectedMonitorOutput: AudioOutputTarget? {
+        didSet {
+            UserDefaults.standard.set(selectedMonitorOutput.map { Self.identifier(for: $0) },
+                                      forKey: Self.monitorOutputDefaultsKey)
+        }
+    }
+
+    /// Where it plays now. Falling through to the playback device and then to
+    /// the system default is what keeps a Mac with speakers from needing the
+    /// setting at all.
+    private var monitorOutput: AudioOutputTarget {
+        selectedMonitorOutput ?? playbackTarget ?? .systemDefault
+    }
+
+    /// The monitor's own player, which exists for the capture alone. Nothing
+    /// else plays what a machine is sending, whereas the received stream
+    /// already has a player behind "Play audio on" — so monitoring that is
+    /// `playbackDestination`'s business, not this one's.
+    private func syncAudioMonitor() {
+        // A monitor left on with nothing to play is a lit button that does
+        // nothing: the source it was turned on for has been switched off or
+        // taken away.
+        if monitoredAudio == nil { isMonitoring = false }
+
+        if monitorsCapture {
+            audioMonitor.start(target: monitorOutput)
+        } else {
+            audioMonitor.stop()
+        }
+    }
+
     /// The source this machine plays. Receive is already taking one, so that is
     /// the one to listen to; Send has to be told which of the machines on the
     /// network is the one talking back.
@@ -798,16 +984,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// somewhere to play it, menu open or closed. Listening to the other
     /// machine is not something you do only while a menu is on screen.
     private func syncAudioPlayback() {
-        guard let playbackTarget, let source = listenSource else {
+        guard let destination = playbackDestination, let source = listenSource else {
+            if ndiAudioReceiver.isRunning { audioHealth.streamEnded() }
             ndiAudioReceiver.stop()
             audioPlayer.stop()
             return
         }
 
-        audioPlayer.start(target: playbackTarget)
+        audioPlayer.start(target: destination)
 
         guard !(ndiAudioReceiver.isRunning && ndiAudioReceiver.sourceName == source) else { return }
+        audioHealth.streamEnded()
         ndiAudioReceiver.start(source: source)
+    }
+
+    /// Where the received stream comes out. The monitor is the second reason
+    /// to play it at all: the user chose nowhere, and pressing the button asks
+    /// to hear it anyway. Deliberately not written back to `playbackTarget` —
+    /// monitoring is a way of listening to a stream for a minute, not a routing
+    /// choice to be remembered and found still in force a week later.
+    private var playbackDestination: AudioOutputTarget? {
+        if let playbackTarget { return playbackTarget }
+        return monitorsReceived ? monitorOutput : nil
     }
 
     /// Discovery and the preview receiver run while the menu is on screen —
@@ -958,6 +1156,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sourceItem.title = Self.fittedTitle("NDI Source: ", currentSource ?? "None")
         listenItem.title = Self.fittedTitle("Listen to: ", selectedListenSource ?? "None")
         playbackItem.title = Self.fittedTitle("Play audio on: ", Self.name(of: playbackTarget))
+        refreshMonitor()
     }
 
     private var cameraName: String? {
@@ -989,6 +1188,76 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .systemDefault:        return "Default output"
         case .device(let uid):      return AudioDevices.device(uid: uid)?.name ?? uid
         }
+    }
+
+    /// The monitor's button and its line, restated together because they are
+    /// two halves of one answer.
+    ///
+    /// The button says whether there is anything to listen to, whether it is
+    /// playing, and — in the tooltip — which of the two streams pressing it
+    /// would play. That last one matters: the button means "my microphone" on
+    /// one tab and "the far end" on the other, and nothing else on the row
+    /// says which. The line says where it is coming out, which is the question
+    /// a monitor that is plainly on and plainly silent raises.
+    private func refreshMonitor() {
+        guard let monitorButton else { return }
+
+        let monitored = monitoredAudio
+        let playing = isMonitoring && monitored != nil
+        let look: MonitorLook = monitored == nil ? .unavailable : (playing ? .playing : .ready)
+
+        if look != monitorLook {
+            monitorLook = look
+            monitorButton.isEnabled = look != .unavailable
+            monitorButton.image = Self.headphones(playing ? .controlAccentColor
+                                                  : (monitored == nil ? .tertiaryLabelColor : .secondaryLabelColor))
+            monitorButton.setAccessibilityLabel(playing ? "Stop monitoring audio" : "Monitor audio")
+        }
+
+        switch (playing, monitored) {
+        case (true, _):
+            monitorButton.toolTip = "Stop listening"
+        case (false, .capture):
+            monitorButton.toolTip = "Listen to what this Mac is sending — on headphones, "
+                + "or the microphone will hear it back"
+        case (false, .received):
+            monitorButton.toolTip = "Listen to what this Mac is receiving"
+        case (false, nil):
+            monitorButton.toolTip = (playbackTarget != nil && listenSource != nil)
+                ? "Already playing on \(Self.name(of: playbackTarget))"
+                : "Nothing to listen to"
+        }
+
+        monitorItem?.isHidden = !playing
+        if playing {
+            let title = Self.fittedTitle("Monitoring on: ", Self.name(of: monitorOutput))
+            if monitorItem.title != title { monitorItem.title = title }
+        }
+    }
+
+    /// The button's symbol, with its colour drawn into it rather than left to
+    /// the button to apply.
+    ///
+    /// A borderless button in a menu item view ignores `contentTintColor` and
+    /// draws a template image dark — which on this menu is a control nobody
+    /// can see. Colouring the image takes the question of whose appearance is
+    /// in force out of the drawing, and resolving the colour here rather than
+    /// in a drawing handler is what makes it the menu's: a handler runs later,
+    /// against the same appearance that got it wrong.
+    private static func headphones(_ color: NSColor) -> NSImage? {
+        guard let symbol = NSImage(systemSymbolName: "headphones", accessibilityDescription: nil)
+        else { return nil }
+
+        let bounds = NSRect(x: 0, y: 0, width: monitorButtonSize, height: monitorButtonSize)
+        symbol.size = bounds.size
+
+        let image = NSImage(size: bounds.size)
+        image.lockFocus()
+        symbol.draw(in: bounds)
+        color.set()
+        bounds.fill(using: .sourceAtop)
+        image.unlockFocus()
+        return image
     }
 
     /// The source line, which in Receive depends on whether audio is being
@@ -1193,6 +1462,79 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         reconcile()
+        // After `reconcile`, which is what turns a monitor off when the source
+        // it was playing has gone.
+        refreshMonitor()
+        updateAudioHealth()
+    }
+
+    // MARK: - Audio Health
+
+    /// Every 5 seconds, awake or not. Often enough that a burst is noticed
+    /// while it is still happening, rare enough to be free: the reading is a
+    /// lock and a sum over sixty small structs.
+    private func startHealthTimer() {
+        let timer = Timer(timeInterval: 5, repeats: true) { [weak self] _ in
+            self?.updateAudioHealth()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        healthTimer = timer
+        updateAudioHealth()
+    }
+
+    private func updateAudioHealth() {
+        let report = audioHealth.report
+
+        if let stage = report.stage, report.faults > 0 {
+            let title = "Audio: " + AudioHealthNotifier.summary(report, stage: stage)
+            if audioHealthItem.title != title { audioHealthItem.title = title }
+            audioHealthItem.isHidden = false
+        } else {
+            audioHealthItem.isHidden = true
+        }
+
+        audioHealthNotifier.consider(report)
+        if menuIsOpen { renderAudioStats(report) }
+    }
+
+    /// The stage-by-stage detail. Durations as well as counts, because "late"
+    /// and "how late" are different questions and only the second one says
+    /// whether the margin was ever close.
+    private func renderAudioStats(_ report: AudioHealth.Report) {
+        guard statsAudioItems.count == 4 else { return }
+
+        // One decimal below 10 ms: the interesting figures here are fractions
+        // of a millisecond, and rounding them all to "0 ms" hides whether the
+        // margin was ever close.
+        func ms(_ seconds: Double) -> String {
+            let value = seconds * 1000
+            return String(format: value < 10 ? "%.1f ms" : "%.0f ms", value)
+        }
+
+        // "OK" is only worth printing about something that ran. A stage that
+        // is switched off saying it is fine is the same false answer as a
+        // meter that reads zero because nothing is plugged in.
+        let capturing = publishesAudio
+        let receiving = ndiAudioReceiver.isRunning
+
+        let lines = [
+            !capturing ? "Capture: not sending audio"
+                : report.captureLate > 0
+                ? "Capture: \(report.captureLate) late, worst \(ms(report.worstWork))"
+                : "Capture: OK, worst \(ms(report.worstWork))",
+            !capturing ? "NDI send: —" : "NDI send: worst \(ms(report.worstSend))",
+            !receiving ? "Network: not receiving audio"
+                : report.networkGaps > 0
+                ? "Network: \(report.networkGaps) gaps, worst \(ms(report.worstGap))"
+                : (report.formatChanges > 0 ? "Network: \(report.formatChanges) format changes" : "Network: OK"),
+            !receiving ? "Playback: —"
+                : report.underruns + report.driftDrops + report.rebuilds > 0
+                ? "Playback: \(report.underruns) dry, \(report.driftDrops) drift, \(report.rebuilds) rebuilds"
+                : "Playback: OK",
+        ]
+        for (item, line) in zip(statsAudioItems, lines) where item.title != line {
+            item.title = line
+        }
     }
 
     // MARK: - Audio Level Meter
@@ -1427,6 +1769,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updaterController.checkForUpdates()
     }
 
+    /// Starts the minute again. What someone wants the moment they have read
+    /// the line is to know whether it is still happening, and the only way to
+    /// ask that is to clear what has already been counted.
+    @objc private func resetAudioHealth(_ sender: NSMenuItem) {
+        audioHealth.reset()
+        updateAudioHealth()
+    }
+
     @objc private func openGitHub(_ sender: Any) {
         NSWorkspace.shared.open(Self.repoURL)
     }
@@ -1464,6 +1814,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func selectListenSource(_ sender: NSMenuItem) {
         selectedListenSource = sender.representedObject as? String
         reconcile()
+    }
+
+    /// The one place monitoring is turned on and off. Unlike every other
+    /// control in this menu it changes nothing that is remembered — pressing it
+    /// is a question about right now.
+    @objc private func toggleAudioMonitor(_ sender: NSButton) {
+        isMonitoring.toggle()
+        reconcile()
+        refreshMonitor()
+    }
+
+    @objc private func selectMonitorOutput(_ sender: NSMenuItem) {
+        selectedMonitorOutput = Self.outputTarget(for: sender.representedObject as? String)
+        reconcile()
+        refreshMonitor()
     }
 
     @objc private func selectPlaybackOutput(_ sender: NSMenuItem) {
@@ -1570,6 +1935,10 @@ extension AppDelegate: NSMenuDelegate {
         netMonitor.start()
         resetStatsDisplay()
         startStatsTimer()
+        // Before the first stats tick, which is a second away: the audio
+        // lines would otherwise read "—" for that second, which looks like an
+        // answer and is not one.
+        updateAudioHealth()
 
         if mode == .receive { refreshVirtualCamera() }
         reconcile()
@@ -1593,6 +1962,8 @@ extension AppDelegate: NSMenuDelegate {
             updateNDISourceSubmenu(menu)
         } else if menu === playbackSubmenu {
             updatePlaybackSubmenu(menu)
+        } else if menu === monitorSubmenu {
+            updateMonitorSubmenu(menu)
         } else if menu === listenSubmenu {
             updateListenSubmenu(menu)
         } else if menu === remoteScreenSubmenu {
@@ -1666,6 +2037,19 @@ extension AppDelegate: NSMenuDelegate {
                               currentID: playbackTarget.map { Self.identifier(for: $0) },
                               action: #selector(selectPlaybackOutput(_:)),
                               includeNone: true,
+                              emptyText: "No outputs found")
+    }
+
+    /// No None: the monitor is only asked where it plays while it is playing,
+    /// and "nowhere" is what the button next to it already means. The tick
+    /// sits on whatever the fallback resolved to when nothing has been chosen,
+    /// so picking that same entry is a no-op rather than a surprise.
+    private func updateMonitorSubmenu(_ menu: NSMenu) {
+        populateSelectionMenu(menu,
+                              entries: Self.outputEntries(),
+                              currentID: Self.identifier(for: monitorOutput),
+                              action: #selector(selectMonitorOutput(_:)),
+                              includeNone: false,
                               emptyText: "No outputs found")
     }
 
