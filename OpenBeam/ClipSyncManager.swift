@@ -59,8 +59,10 @@ final class ClipSyncManager: NSObject, @unchecked Sendable {
         var sessions: [String: ClipSyncConnection] = [:]
         /// Pairing-only connections (no peerID until handshake completes).
         var pairing: [ObjectIdentifier: ClipSyncConnection] = [:]
-        /// Tracks which peerIDs we've already attempted outbound to (to prevent thrash).
-        var pendingDial: Set<String> = []
+        /// Outbound session dials in flight, and the peer each is for: at most one
+        /// per peer, to prevent thrash. Keyed by connection because a dial that
+        /// fails before its handshake has no peerID of its own to clear it by.
+        var dialing: [ObjectIdentifier: String] = [:]
     }
 
     // MARK: - Init
@@ -133,7 +135,7 @@ final class ClipSyncManager: NSObject, @unchecked Sendable {
             // side wins. This branch keeps both apps responsive.
         }
 
-        let nwc = NWConnection(to: endpoint, using: NWParameters.tcp)
+        let nwc = NWConnection(to: endpoint, using: Self.dialParameters)
         adopt(connection: nwc, role: .initiator, intent: .pair)
     }
 
@@ -153,15 +155,20 @@ final class ClipSyncManager: NSObject, @unchecked Sendable {
     private enum Intent { case session, pair }
 
     private func adopt(connection nwc: NWConnection, role: ClipSyncConnection.Role, intent: Intent = .session) {
+        let conn = makeConnection(nwc, role: role, intent: intent)
+        // Every connection starts in the pairing bucket; the handshake moves it
+        // to sessions once it identifies a paired peer.
+        lock.withLock { $0.pairing[ObjectIdentifier(conn)] = conn }
+        conn.start()
+    }
+
+    private func makeConnection(_ nwc: NWConnection, role: ClipSyncConnection.Role, intent: Intent) -> ClipSyncConnection {
         let conn = ClipSyncConnection(role: role,
                                       connection: nwc,
                                       identity: identity,
                                       userInitiatedPair: intent == .pair)
         conn.delegate = self
-        // Every connection starts in the pairing bucket; the handshake moves it
-        // to sessions once it identifies a paired peer.
-        lock.withLock { $0.pairing[ObjectIdentifier(conn)] = conn }
-        conn.start()
+        return conn
     }
 
     private func openSessionIfNeeded(for peer: PairedPeer) {
@@ -172,15 +179,26 @@ final class ClipSyncManager: NSObject, @unchecked Sendable {
               let endpoint = ClipSyncDiscovery.endpoint(of: discovered) else {
             return    // peer offline; will retry on next outbound when discovered
         }
-        let alreadyDialing: Bool = lock.withLock { state in
-            if state.pendingDial.contains(peer.peerID) { return true }
-            state.pendingDial.insert(peer.peerID)
-            return false
+        let conn = makeConnection(NWConnection(to: endpoint, using: Self.dialParameters), role: .initiator, intent: .session)
+        // Claimed and registered in one step, before it starts, so no other
+        // caller dials the same peer and no close can arrive unaccounted for.
+        let claimed: Bool = lock.withLock { state in
+            guard !state.dialing.values.contains(peer.peerID) else { return false }
+            state.dialing[ObjectIdentifier(conn)] = peer.peerID
+            state.pairing[ObjectIdentifier(conn)] = conn
+            return true
         }
-        guard !alreadyDialing else { return }
+        guard claimed else { return }
+        conn.start()
+    }
 
-        let nwc = NWConnection(to: endpoint, using: NWParameters.tcp)
-        adopt(connection: nwc, role: .initiator, intent: .session)
+    /// TCP that gives up on a connect after 5 s. The default waits over a minute
+    /// on a network that drops packets for a closed port, with anything queued
+    /// for that peer stuck behind it.
+    private static var dialParameters: NWParameters {
+        let tcp = NWProtocolTCP.Options()
+        tcp.connectionTimeout = 5
+        return NWParameters(tls: nil, tcp: tcp)
     }
 
     /// Encrypt + send `payloadData` (plaintext JSON bytes) on every paired+ready connection.
@@ -215,7 +233,7 @@ extension ClipSyncManager: ClipSyncConnectionDelegate {
                 let prev = s.sessions[peerHello.peerID]
                 s.sessions[peerHello.peerID] = c
                 s.pairing.removeValue(forKey: ObjectIdentifier(c))
-                s.pendingDial.remove(peerHello.peerID)
+                s.dialing.removeValue(forKey: ObjectIdentifier(c))
                 return prev
             }
             oldSession?.cancel()
@@ -350,13 +368,13 @@ extension ClipSyncManager: ClipSyncConnectionDelegate {
         if let error {
             print("[OpenBeam] ClipSync connection closed with error: \(error)")
         }
-        let peerID = c.peerID
         lock.withLock { state in
+            let dialedPeer = state.dialing.removeValue(forKey: ObjectIdentifier(c))
+            let peerID = c.peerID ?? dialedPeer
             state.pairing.removeValue(forKey: ObjectIdentifier(c))
             if let peerID, state.sessions[peerID] === c {
                 state.sessions.removeValue(forKey: peerID)
             }
-            if let peerID { state.pendingDial.remove(peerID) }
         }
         // A pair that ended without an answer: say so rather than leave the
         // panel spinning. Accept and reject already resolved their own panel,

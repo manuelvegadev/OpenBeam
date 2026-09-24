@@ -292,8 +292,11 @@ final class BonjourBrowser: @unchecked Sendable {
     private func upsertResolved(_ r: Result) {
         let prev = resolved[r.name]
         resolved[r.name] = r
-        // Once we have a result, we can tear down the in-flight resolve.
-        resolves.removeValue(forKey: r.name)?.cancel()
+        // The resolve stays open for as long as the service is there. A peer that
+        // restarts comes back under the same name on a new port, and the browse
+        // does not always report that as a remove and an add; only a live resolve
+        // hears the new port. Tearing it down after the first answer left us
+        // dialling the old port until this app restarted.
         if prev != r { onChange?(Set(resolved.values)) }
     }
 

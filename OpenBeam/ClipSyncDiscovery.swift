@@ -142,6 +142,10 @@ final class ClipSyncDiscovery: @unchecked Sendable {
             let os = r.txt["os"] ?? "unknown"
             let v = Int(r.txt["v"] ?? "1") ?? 1
 
+            // Host and port from our own dns_sd resolve, which stays open and so
+            // follows a peer that restarts onto a new port. Not a service
+            // endpoint: Network.framework's Bonjour path is the one that fails
+            // with NoAuth on ad-hoc builds (see ClipSyncBonjour.swift).
             let endpoint = NWEndpoint.hostPort(
                 host: NWEndpoint.Host(r.host),
                 port: NWEndpoint.Port(rawValue: r.port) ?? .any

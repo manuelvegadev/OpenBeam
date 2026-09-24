@@ -119,6 +119,11 @@ final class ClipSyncConnection: @unchecked Sendable {
             scheduleReceive()
         case .failed(let err):
             close(with: err)
+        case .waiting(let err) where role == .initiator:
+            // A dial that cannot connect waits and retries the same endpoint
+            // forever, and a peer that restarted is on another port by now.
+            // Failing lets the manager dial again from the current Bonjour answer.
+            close(with: err)
         case .cancelled:
             close(with: nil)
         default:
