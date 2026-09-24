@@ -11,6 +11,24 @@ deciding whether to take the update — not assembled from commit subjects.
 
 ## [Unreleased]
 
+## [2.8.1] - 2026-09-24
+
+### Fixed
+
+- **Your voice no longer breaks up in the call.** NDI Tools' `NDI Audio` microphone, left at
+  44.1 kHz with a 48 kHz stream (any app can change its rate), cut the voice into short
+  pieces about ten times a second. In Receive, OpenBeam now keeps the microphone the audio
+  goes into at the stream's own rate. That's `NDI Audio`, or the loopback **Play audio on**
+  points at. When it has to correct the rate, it says so at the top of the menu. If another
+  app keeps changing it, OpenBeam stops correcting it (each change is itself a glitch in the
+  call) and sends a notification instead.
+- **The Receive monitor plays what the call hears.** It used to play the stream as it came
+  off the network, which is not the path to the call: the `NDI Audio` driver receives it on
+  its own. So the monitor sounded clean while the call heard a broken voice. It now captures
+  the microphone the audio is going into, the way the call does: the loopback **Play audio
+  on** points at (BlackHole, say), or `NDI Audio` otherwise. The meter follows it while
+  monitoring.
+
 ## [2.8.0] - 2026-09-24
 
 ### Added
@@ -360,7 +378,8 @@ captures a microphone raw, with no echo canceller of its own.
   as an NDI source on the local network, with a live preview, camera selection, macOS camera
   effects and statistics.
 
-[Unreleased]: https://github.com/manuelvegadev/OpenBeam/compare/v2.8.0...HEAD
+[Unreleased]: https://github.com/manuelvegadev/OpenBeam/compare/v2.8.1...HEAD
+[2.8.1]: https://github.com/manuelvegadev/OpenBeam/compare/v2.8.0...v2.8.1
 [2.8.0]: https://github.com/manuelvegadev/OpenBeam/compare/v2.7.4...v2.8.0
 [2.7.4]: https://github.com/manuelvegadev/OpenBeam/compare/v2.7.3...v2.7.4
 [2.7.3]: https://github.com/manuelvegadev/OpenBeam/compare/v2.7.2...v2.7.3
