@@ -11,6 +11,15 @@ deciding whether to take the update — not assembled from commit subjects.
 
 ## [Unreleased]
 
+## [2.7.1] - 2026-09-23
+
+### Fixed
+
+- **The remote Mac's menu bar can be used in full screen.** Reaching the top of the screen
+  slid this Mac's menu bar down over the other Mac's, and it took the clicks. In full screen
+  this Mac's menu bar and Dock now stay out of the way entirely; **⌃⌥⌘F** leaves full screen
+  and **⌃⌥⌘W** closes the viewer.
+
 ## [2.7.0] - 2026-09-23
 
 ### Added
@@ -296,7 +305,8 @@ captures a microphone raw, with no echo canceller of its own.
   as an NDI source on the local network, with a live preview, camera selection, macOS camera
   effects and statistics.
 
-[Unreleased]: https://github.com/manuelvegadev/OpenBeam/compare/v2.7.0...HEAD
+[Unreleased]: https://github.com/manuelvegadev/OpenBeam/compare/v2.7.1...HEAD
+[2.7.1]: https://github.com/manuelvegadev/OpenBeam/compare/v2.7.0...v2.7.1
 [2.7.0]: https://github.com/manuelvegadev/OpenBeam/compare/v2.6.1...v2.7.0
 [2.6.1]: https://github.com/manuelvegadev/OpenBeam/compare/v2.6.0...v2.6.1
 [2.6.0]: https://github.com/manuelvegadev/OpenBeam/compare/v2.5.0...v2.6.0
