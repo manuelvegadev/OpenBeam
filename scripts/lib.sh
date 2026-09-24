@@ -1,5 +1,5 @@
 #!/bin/bash
-# Shared by build-dmg.sh, make-appcast.sh and release.sh.
+# Shared by build-dmg.sh, make-appcast.sh, release.sh and import-signing-certificate.sh.
 #
 # These values are the seams between the three scripts: build-dmg.sh writes the
 # archive make-appcast.sh signs, and both look for Sparkle's tools in the same
@@ -10,6 +10,11 @@
 APP_NAME="OpenBeam"
 REPO="manuelvegadev/OpenBeam"
 SITE_URL="https://openbeam.manuelvega.dev"
+# OpenBeam's own self-signed certificate. Signing with one certificate gives
+# every release the same identity, which is what macOS files permissions
+# under: an ad-hoc build's identity is its own hash, so each update used to
+# look like a new app and lose Screen Recording and Accessibility.
+SIGNING_IDENTITY="OpenBeam Code Signing"
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT="$PROJECT_DIR/OpenBeam.xcodeproj"

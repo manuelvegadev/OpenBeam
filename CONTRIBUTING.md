@@ -149,12 +149,59 @@ the major for a change that breaks an existing setup.
 anyone remembers to bump. Do not undo that: an update that reports the same build number
 as the version it replaces is an update nobody is ever offered.
 
+## The code signing certificate
+
+Releases are signed with **OpenBeam Code Signing**, a self-signed certificate valid until
+2036. What it buys is one identity across releases. macOS files permissions — Screen
+Recording, Accessibility — under an app's designated requirement. An ad-hoc build's
+requirement is its own hash, so until 2.7.2 every update looked like a new app: its entries
+still showed as allowed in System Settings but applied to nothing, and each had to be removed
+and added again by hand. Signed with the certificate, the requirement reads
+`identifier "manuelvegadev.OpenBeam" and certificate leaf = H"08b7…7681"`, the same for
+every build signed with it.
+
+It is not trusted by anything and does not need to be: `codesign` needs to reach the private
+key, not to trust the certificate. It does nothing for Gatekeeper, which still warns on the
+first install; only a paid Developer ID with notarization does that.
+
+- **CI** gets it from two secrets, `SIGNING_CERTIFICATE_P12` (the `.p12`, base64-encoded)
+  and `SIGNING_CERTIFICATE_PASSWORD`; `scripts/import-signing-certificate.sh` puts it in a
+  keychain of its own before the build.
+- **A Mac** that builds releases needs it in its login keychain. `scripts/build-dmg.sh` signs
+  with it when it is there, signs ad hoc with a warning when it is not, and refuses a tag
+  build without it — a release that went out ad hoc would reset every user's permissions.
+- **Back it up.** Export it from Keychain Access (My Certificates → OpenBeam Code Signing →
+  Export, as `.p12`) into a password manager. Losing it is not fatal, since a new
+  certificate works the same way, but every user would have to grant the permissions once
+  more, as they did moving to this one.
+
+To make a new one, if it is ever lost:
+
+```bash
+cat > cert.cnf <<'CNF'
+[req]
+distinguished_name = dn
+prompt = no
+x509_extensions = ext
+[dn]
+CN = OpenBeam Code Signing
+[ext]
+basicConstraints = critical,CA:false
+keyUsage = critical,digitalSignature
+extendedKeyUsage = critical,codeSigning
+CNF
+openssl req -x509 -newkey rsa:3072 -nodes -keyout key.pem -out cert.pem -days 3650 -config cert.cnf
+# macOS only imports a .p12 in the old algorithms, hence -legacy and the rest (OpenSSL 3):
+openssl pkcs12 -export -legacy -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1 \
+    -inkey key.pem -in cert.pem -out OpenBeamCodeSigning.p12 -name "OpenBeam Code Signing"
+```
+
 ## The Sparkle signing key
 
-OpenBeam is ad-hoc signed and not notarized, so Sparkle's code-signature check can never
-pass across an update — its designated requirement pins a per-binary cdhash. The EdDSA
-signature on the update archive is therefore the *only* thing standing between a user and
-a hostile update.
+OpenBeam is not notarized, and until 2.7.2 it was ad-hoc signed, so Sparkle's code-signature
+check could not pass across those updates — their designated requirement pinned a per-binary
+cdhash. The EdDSA signature on the update archive is what carries an update across that, and
+it stays the one thing standing between a user and a hostile update.
 
 Set up once, with Sparkle's tools from the resolved package
 (`.derived/SourcePackages/artifacts/sparkle/Sparkle/bin/`):
@@ -175,9 +222,8 @@ With a key Sparkle cannot use, it does not start: every launch opens with a moda
 greyed out, and no build can ever update itself. The guard is there so that never
 reaches a release.
 
-Losing the private key means no installed copy can ever be updated again — and with
-ad-hoc signing there is no code-signing path to fall back on. Rotating it requires
-everyone to reinstall by hand.
+Losing the private key means no installed copy can ever be updated again. Rotating it
+requires everyone to reinstall by hand.
 
 ## The site
 

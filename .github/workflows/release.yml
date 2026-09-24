@@ -30,6 +30,15 @@ jobs:
           key: spm-${{ hashFiles('OpenBeam.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
           restore-keys: spm-
 
+      # Every release is signed with the same self-signed certificate, so macOS
+      # sees one app across updates and keeps its Screen Recording and
+      # Accessibility permissions. build-dmg.sh refuses a tag build without it.
+      - name: Import the code signing certificate
+        env:
+          SIGNING_CERTIFICATE_P12: ${{ secrets.SIGNING_CERTIFICATE_P12 }}
+          SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.SIGNING_CERTIFICATE_PASSWORD }}
+        run: ./scripts/import-signing-certificate.sh
+
       - name: Build DMG and update archive
         run: ./scripts/build-dmg.sh
 
