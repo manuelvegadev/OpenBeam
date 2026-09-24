@@ -39,17 +39,34 @@ final class AudioHealthNotifier {
         guard report.faults >= Self.threshold, let stage = report.stage else { return }
         if let lastPosted, Date().timeIntervalSince(lastPosted) < Self.cooldown { return }
 
+        // Not posted once permission comes back: the next tick does that, if
+        // the burst is still going on.
+        whenAuthorized(postAfterAsking: false) { [weak self] in self?.post(report, stage: stage) }
+    }
+
+    /// A one-off, for a fault the counters cannot see — one past the end of
+    /// the pipeline, in a driver that is not ours. Not subject to the
+    /// threshold or the cooldown: the caller only says it once. Posted as soon
+    /// as permission comes back when this is what asked for it, since there is
+    /// no next tick to post it on.
+    func notify(title: String, body: String) {
+        whenAuthorized(postAfterAsking: true) { [weak self] in self?.deliver(title: title, body: body) }
+    }
+
+    /// Runs `post` now if notifications are allowed, and asks when nobody has
+    /// yet — running it once granted only if `postAfterAsking`.
+    private func whenAuthorized(postAfterAsking: Bool, _ post: @escaping () -> Void) {
         switch authorized {
         case .some(false):
             return
         case .some(true):
-            post(report, stage: stage)
+            post()
         case nil:
-            requestAuthorization()
+            requestAuthorization { granted in if granted && postAfterAsking { post() } }
         }
     }
 
-    private func requestAuthorization() {
+    private func requestAuthorization(then completion: @escaping (Bool) -> Void) {
         guard !asking else { return }
         asking = true
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert]) { [weak self] granted, _ in
@@ -57,16 +74,20 @@ final class AudioHealthNotifier {
                 guard let self else { return }
                 self.asking = false
                 self.authorized = granted
+                completion(granted)
             }
         }
     }
 
     private func post(_ report: AudioHealth.Report, stage: AudioStage) {
         lastPosted = Date()
+        deliver(title: "Audio is breaking up", body: AudioHealthNotifier.summary(report, stage: stage))
+    }
 
+    private func deliver(title: String, body: String) {
         let content = UNMutableNotificationContent()
-        content.title = "Audio is breaking up"
-        content.body = AudioHealthNotifier.summary(report, stage: stage)
+        content.title = title
+        content.body = body
 
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request)

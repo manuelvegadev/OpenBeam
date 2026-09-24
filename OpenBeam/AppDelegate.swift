@@ -71,6 +71,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// happens in the middle of a call, which is exactly when nothing else in
     /// this app is running.
     private var healthTimer: Timer?
+    /// Keeps the microphone the received audio goes into at the stream's
+    /// rate. Its notice sits beside the health one, hidden the same way.
+    private let microphoneRate = MicrophoneRate()
+    /// Follows devices coming and going — a driver reloading, a loopback
+    /// being installed — which changes which microphone Receive is feeding.
+    private var devicesObserver: AudioDevices.Observer?
+    /// A row rather than a plain item: a plain item reads as a button, and
+    /// there is usually nothing to press — the rate has already been fixed.
+    private var micRateItem: NSMenuItem!
+    private var micRateIcon: NSImageView!
+    private var micRateTitle: NSTextField!
+    private var micRateDetail: NSTextField!
+    private var micRateRetry: NSButton!
     private var statsAudioItems: [NSMenuItem] = []
     private let clipSyncManager = ClipSyncManager()
     private let netMonitor = NetTrafficMonitor()
@@ -301,6 +314,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         selectedListenSource = UserDefaults.standard.string(forKey: Self.listenSourceDefaultsKey)
         buildStatusItem()
         configurePipeline()
+        microphoneRate.onChange = { [weak self] in self?.microphoneRateChanged() }
+        devicesObserver = AudioDevices.Observer(kAudioHardwarePropertyDevices, queue: .main) { [weak self] in
+            self?.reconcile()
+        }
         apply(mode: saved)
         // After the status item, so that if Sparkle's updater fails to start —
         // it reports that with a modal alert a second later — the app is not a
@@ -448,6 +465,74 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         audioHealthItem.toolTip = "Click to start counting again"
         audioHealthItem.isHidden = true
         menu.addItem(audioHealthItem)
+
+        // --- Microphone rate notice ---
+        // Also hidden until there is something to say. Informational when the
+        // rate has been fixed, which is nearly always: the only control is the
+        // ✕ that closes it. "Retry" appears only once OpenBeam has stopped
+        // correcting, because that is the one case with something left to do.
+        let rateRowHeight: CGFloat = 44
+        let rateRow = MenuRowView(frame: NSRect(x: 0, y: 0, width: Self.baseWidth, height: rateRowHeight))
+        let iconSize: CGFloat = 16
+        let closeSize: CGFloat = 16
+        let gap: CGFloat = 8
+
+        let icon = NSImageView(frame: NSRect(x: Self.contentInsetX, y: (rateRowHeight - iconSize) / 2,
+                                             width: iconSize, height: iconSize))
+        icon.symbolConfiguration = .init(pointSize: 13, weight: .regular)
+        rateRow.addSubview(icon)
+        micRateIcon = icon
+
+        let labelX = Self.contentInsetX + iconSize + gap
+        let rateTitle = NSTextField(labelWithString: "")
+        rateTitle.font = .menuFont(ofSize: 13)
+        rateTitle.lineBreakMode = .byTruncatingTail
+        rateTitle.frame = NSRect(x: labelX, y: rateRowHeight / 2, width: 0, height: 17)
+        rateRow.addSubview(rateTitle)
+        micRateTitle = rateTitle
+
+        let rateDetail = NSTextField(labelWithString: "")
+        rateDetail.font = .systemFont(ofSize: 11)
+        rateDetail.textColor = .secondaryLabelColor
+        rateDetail.lineBreakMode = .byTruncatingTail
+        rateDetail.frame = NSRect(x: labelX, y: rateRowHeight / 2 - 15, width: 0, height: 14)
+        rateRow.addSubview(rateDetail)
+        micRateDetail = rateDetail
+
+        let close = NSButton(frame: NSRect(x: 0, y: (rateRowHeight - closeSize) / 2,
+                                           width: closeSize, height: closeSize))
+        close.bezelStyle = .inline
+        close.isBordered = false
+        // Coloured into the image: a borderless button in a menu row ignores
+        // `contentTintColor` (see `headphones`).
+        close.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Dismiss")?
+            .withSymbolConfiguration(.init(pointSize: 10, weight: .semibold))
+            .map { Self.tinted($0, .secondaryLabelColor) }
+        close.toolTip = "Dismiss"
+        close.target = self
+        close.action = #selector(dismissMicrophoneRate(_:))
+        rateRow.addSubview(close)
+
+        let retry = NSButton(title: "Retry", target: self, action: #selector(retryMicrophoneRate(_:)))
+        retry.bezelStyle = .push
+        retry.controlSize = .small
+        retry.font = .systemFont(ofSize: 11)
+        retry.sizeToFit()
+        retry.frame.origin.y = (rateRowHeight - retry.frame.height) / 2
+        retry.isHidden = true
+        rateRow.addSubview(retry)
+        micRateRetry = retry
+
+        rateRow.layoutHandler = { bounds in
+            close.frame.origin.x = bounds.width - Self.contentInsetX - closeSize
+            retry.frame.origin.x = close.frame.minX - gap - retry.frame.width
+            let trailing = retry.isHidden ? close.frame.minX : retry.frame.minX
+            let width = max(0, trailing - gap - labelX)
+            rateTitle.frame.size.width = width
+            rateDetail.frame.size.width = width
+        }
+        micRateItem = addRow(rateRow, to: menu)
+        micRateItem.isHidden = true
 
         // --- Mode tabs ---
         // A custom view rather than two menu items: clicking a menu item closes
@@ -701,12 +786,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Adds a row whose contents are laid out from its own width, applying the
     /// layout once so the geometry is spelled in the handler and nowhere else.
-    private func addRow(_ row: MenuRowView, to menu: NSMenu) {
+    @discardableResult
+    private func addRow(_ row: MenuRowView, to menu: NSMenu) -> NSMenuItem {
         let item = NSMenuItem()
         item.view = row
         row.fit(to: Self.baseWidth)
         menuRows.append(row)
         menu.addItem(item)
+        return item
     }
 
     private func addDisabledItem(to menu: NSMenu, title: String) -> NSMenuItem {
@@ -876,7 +963,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Choosing the subset per call site is how a stream comes to be silently
     /// not started.
     private func reconcile() {
+        receiveMicrophone = resolveReceiveMicrophone()
         startAudioCapture()
+        syncMicrophoneRate()
         syncAudioMonitor()
         syncNDIPublishing()
         syncReceiveSession()
@@ -926,6 +1015,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard playbackTarget == nil else { return nil }
             return listenSource != nil ? .received : nil
         }
+    }
+
+    /// The microphone the received audio reaches the call through, which
+    /// follows from where OpenBeam sends it rather than from any one driver:
+    ///
+    /// - "Play audio on" a loopback — a device with an input as well as an
+    ///   output, like BlackHole — plays into that input, so the input is the
+    ///   microphone the call picks.
+    /// - Otherwise nothing of ours reaches a microphone, and the audio gets
+    ///   there through the virtual camera's own driver, `NDI Audio`.
+    ///
+    /// Which microphone the call app has actually selected is not something
+    /// macOS will say; this is the one we are feeding.
+    ///
+    /// Resolved once per `reconcile` and read from here: each answer is
+    /// several CoreAudio round-trips. Nil in Send, which feeds no microphone.
+    private var receiveMicrophone: AudioDevices.Device?
+
+    private func resolveReceiveMicrophone() -> AudioDevices.Device? {
+        guard mode == .receive else { return nil }
+        if let device = playbackTarget?.resolvedDevice, AudioDevices.hasInput(device.id) {
+            return device
+        }
+        return AudioDevices.ndiAudio()
+    }
+
+    /// The rate of the stream the Receive microphone carries, when this Mac is
+    /// receiving it too, and NDI's own otherwise.
+    private var streamRate: Double {
+        audioHealth.receivedSampleRate ?? MicrophoneRate.defaultRate
+    }
+
+    /// Only the machine in the call has a microphone to keep right. Run with
+    /// every reconcile and on the health tick, which is what catches the
+    /// stream's rate becoming known with the menu closed.
+    private func syncMicrophoneRate() {
+        guard let microphone = receiveMicrophone else {
+            microphoneRate.watch(nil)
+            return
+        }
+        microphoneRate.watch(.init(device: microphone, rate: streamRate))
     }
 
     private var monitorsCapture: Bool { isMonitoring && monitoredAudio == .capture }
@@ -1471,6 +1601,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateAudioHealth()
     }
 
+    // MARK: - Microphone Rate
+
+    private func updateMicrophoneRateNotice() {
+        let kHz = Self.kHz
+        func show(symbol: String, color: NSColor, title: String, detail: String, canRetry: Bool) {
+            micRateIcon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+            micRateIcon.contentTintColor = color
+            micRateTitle.stringValue = title
+            micRateDetail.stringValue = detail
+            micRateTitle.toolTip = "\(title). \(detail)"
+            micRateDetail.toolTip = micRateTitle.toolTip
+            micRateRetry.isHidden = !canRetry
+            // Retry changes how much room the text has.
+            if let row = micRateItem.view as? MenuRowView { row.fit(to: row.frame.width) }
+            micRateItem.isHidden = false
+        }
+
+        switch microphoneRate.notice {
+        case nil:
+            micRateItem.isHidden = true
+
+        case .corrected(let device, let from, let to):
+            show(symbol: "checkmark.circle.fill", color: .systemGreen,
+                 title: "\(device) set to \(kHz(to))",
+                 detail: "It was at \(kHz(from)); the stream is \(kHz(to)).",
+                 canRetry: false)
+
+        case .overridden(let device, let by, _):
+            show(symbol: "exclamationmark.triangle.fill", color: .systemOrange,
+                 title: "\(device) stuck at \(kHz(by))",
+                 detail: "Another app keeps changing it. Quit it, then retry.",
+                 canRetry: true)
+        }
+    }
+
+    private func microphoneRateChanged() {
+        updateMicrophoneRateNotice()
+
+        // The one case worth interrupting for: it is broken now, in the call,
+        // and nothing here is fixing it any more.
+        guard case .overridden(let device, let by, let wants) = microphoneRate.notice else { return }
+        audioHealthNotifier.notify(
+            title: "Call audio may be breaking up",
+            body: "Another app keeps setting \(device) to \(Self.kHz(by)). The stream is \(Self.kHz(wants)).")
+    }
+
+    private static func kHz(_ rate: Float64) -> String {
+        let value = rate / 1000
+        return value == value.rounded() ? "\(Int(value)) kHz" : String(format: "%.1f kHz", value)
+    }
+
     // MARK: - Audio Health
 
     /// Every 5 seconds, awake or not. Often enough that a burst is noticed
@@ -1478,7 +1659,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// lock and a sum over sixty small structs.
     private func startHealthTimer() {
         let timer = Timer(timeInterval: 5, repeats: true) { [weak self] _ in
-            self?.updateAudioHealth()
+            guard let self else { return }
+            self.updateAudioHealth()
+            self.receiveMicrophone = self.resolveReceiveMicrophone()
+            self.syncMicrophoneRate()
         }
         RunLoop.main.add(timer, forMode: .common)
         healthTimer = timer
@@ -1797,6 +1981,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func resetAudioHealth(_ sender: NSMenuItem) {
         audioHealth.reset()
         updateAudioHealth()
+    }
+
+    @objc private func dismissMicrophoneRate(_ sender: NSButton) {
+        microphoneRate.dismiss()
+    }
+
+    @objc private func retryMicrophoneRate(_ sender: NSButton) {
+        microphoneRate.retry()
     }
 
     @objc private func openGitHub(_ sender: Any) {

@@ -132,6 +132,52 @@ enum AudioDevices {
         return object
     }
 
+    /// NDI Tools' virtual microphone, which the virtual camera's audio reaches
+    /// a call through. Found by the driver's UID, the same on every install
+    /// seen so far; by name as a fallback for a release that changes it — and
+    /// only among inputs, because NDI Tools also installs an *output* with the
+    /// same name.
+    static func ndiAudio() -> Device? {
+        device(uid: "BF568F24-731B-41DB-932E-AC7E260BC71A")
+            ?? allDevices().lazy.compactMap(device).first { $0.name == "NDI Audio" && hasInput($0.id) }
+    }
+
+    /// Whether the device can record — for a loopback, whether playing into it
+    /// makes a microphone of it.
+    static func hasInput(_ device: AudioDeviceID) -> Bool {
+        channelCount(device, scope: kAudioObjectPropertyScopeInput) > 0
+    }
+
+    // MARK: - Sample rate
+
+    static func nominalRate(of device: AudioDeviceID) -> Float64? {
+        var address = address(kAudioDevicePropertyNominalSampleRate)
+        var rate: Float64 = 0
+        var size = UInt32(MemoryLayout<Float64>.size)
+        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &rate) == noErr else { return nil }
+        return rate
+    }
+
+    static func setNominalRate(_ rate: Float64, of device: AudioDeviceID) -> Bool {
+        var address = address(kAudioDevicePropertyNominalSampleRate)
+        var value = rate
+        return AudioObjectSetPropertyData(device, &address, 0, nil,
+                                          UInt32(MemoryLayout<Float64>.size), &value) == noErr
+    }
+
+    /// Whether the device offers this rate, as a value or inside a range.
+    static func supports(rate: Float64, device: AudioDeviceID) -> Bool {
+        var address = address(kAudioDevicePropertyAvailableNominalSampleRates)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(device, &address, 0, nil, &size) == noErr, size > 0
+        else { return false }
+
+        var ranges = [AudioValueRange](repeating: AudioValueRange(),
+                                       count: Int(size) / MemoryLayout<AudioValueRange>.size)
+        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &ranges) == noErr else { return false }
+        return ranges.contains { $0.mMinimum <= rate && rate <= $0.mMaximum }
+    }
+
     // MARK: - Watching the hardware
 
     /// A property listener that unregisters itself when it is released. Both

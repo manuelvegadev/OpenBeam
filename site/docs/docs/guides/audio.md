@@ -74,6 +74,13 @@ On B, leave **Play audio on** at `None` in this setup: A's voice is already goin
 call as a virtual microphone, and playing it out of B's speakers as well would only put it
 in B's room.
 
+The microphone the audio goes into has to run at the stream's rate, 48 kHz for NDI:
+`NDI Audio` at 44.1 kHz cuts the voice into short pieces while the stream on the network is
+still clean. Any app can change the rate, so OpenBeam in Receive keeps the microphone at the
+stream's rate and says so at the top of the menu when it had to. If an app keeps setting it
+back, OpenBeam stops and sends a notification: quit that app, then press **Retry** on that
+line in the menu.
+
 :::warning
 Use headphones at A. A's microphone is what the call hears and A's speakers are playing
 the call, so on speakers the meeting hears itself back. OpenBeam captures a microphone

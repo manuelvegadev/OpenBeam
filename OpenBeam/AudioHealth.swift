@@ -165,6 +165,9 @@ final class AudioHealth: @unchecked Sendable {
 
     /// The receive side has stopped, so the next block is not late — it is the
     /// first of a new stream.
+    /// The rate of the stream being received, once a block has said.
+    var receivedSampleRate: Double? { state.withLock { $0.format?.sampleRate } }
+
     func streamEnded() {
         state.withLock { $0.lastArrival = 0; $0.format = nil }
     }
