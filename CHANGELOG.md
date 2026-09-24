@@ -11,6 +11,78 @@ deciding whether to take the update — not assembled from commit subjects.
 
 ## [Unreleased]
 
+## [2.7.0] - 2026-09-23
+
+### Added
+
+- **See and control another Mac.** **Remote Screen → View** shows a paired Mac's screen in a
+  window on this one and sends it your keyboard and mouse — built for two Macs on one desk
+  joined by a Thunderbolt cable, where it runs at the other Mac's full HiDPI resolution and
+  refresh rate (120 fps measured) with no compression, about 12 ms from its screen to yours.
+  Shortcuts other apps have claimed — ⌘Tab, Spotlight, Raycast, Rectangle — go to the other
+  Mac while its window has the focus; media keys can too. ⌃⌥⌘← and → switch between its
+  displays, ⌃⌥⌘↓ shows them arranged as in System Settings, ⌃⌥⌘R gives the keyboard back.
+  A dropped connection reconnects on its own in the same window; without the cable it falls
+  back to the network at lower resolution, enough to keep the session, not to work in.
+  **Nothing can control a Mac until you allow it**, per paired Mac, in **Settings → Remote
+  Screen**; that Mac also needs Screen Recording and Accessibility, and its menu bar icon
+  turns orange while someone is in control.
+
+- **Keep Awake, with the lid closed if you want.** **Keep Awake** in the menu keeps the Mac
+  from sleeping — indefinitely or for one to eight hours, with the display on or not — so
+  KeepingYouAwake or Amphetamine are no longer needed alongside OpenBeam. **Even With the Lid
+  Closed** asks for your password once and then keeps a laptop running shut without an
+  external display; it lets go on battery below 20 %, and is undone when you turn Keep Awake
+  off or quit. A Mac being controlled over Remote Screen stays awake by itself.
+
+- **The app watches its own audio and says when it breaks.** Three counters, one per stage
+  the audio passes through: the capture thread missing its deadline, the stream stalling on
+  the wire, and the playback cushion running dry. Each is an exact event at the place it
+  happens, so when something goes wrong OpenBeam names the stage instead of leaving you to
+  guess — a capture that is already broken rules out the network and the NDI audio driver in
+  one line. A notice appears at the top of the menu when there is something to report and is
+  absent the rest of the time; pressing it starts the minute again. The numbers behind it are
+  under **Statistics → Audio**, including the time spent inside libndi on the audio thread.
+
+- **A notification when it happens, not when you next look.** This is a fault that happens in
+  the middle of a call with the menu closed, so the app says so at the time — at most once
+  every two minutes, and only for a run of dropouts rather than a single click. macOS asks for
+  permission the first time there is something to say, not at launch.
+
+- **Listen to the audio the level meter is showing.** A headphones button beside the meter
+  plays, out of this machine, whatever the bar is moving to: on **Send** the microphone or
+  system audio on its way to the virtual microphone at the other end, on **Receive** the
+  stream coming off the network. It is for audio that arrives distorted with nothing to say
+  where it went wrong — hearing the capture already broken, on the machine it is captured on,
+  rules out the network and the NDI audio driver in one go. Use headphones when what you are
+  monitoring is a microphone, or it will hear itself back. Nothing about it is remembered: it
+  is off at launch, switching tabs turns it off, and it changes neither what is sent nor where
+  **Play audio on** plays. When that stream is already coming out of a speaker here, the
+  button is greyed out and says so.
+
+- **OpenBeam's own plumbing no longer shows up as somewhere to play.** Choosing to send the
+  system audio builds a private aggregate device around the tap, and macOS hides that from the
+  Sound pane and from every other app — but not from OpenBeam, which was listing it back to you
+  as "OpenBeam System Audio", beside one of CoreAudio's own. Both are gone from every output
+  picker; an aggregate you built yourself in Audio MIDI Setup stays.
+
+- **A line that says where the monitor is playing**, under **Play audio on** and only while it
+  is playing, with a picker of its own. It needs one: the machine most worth monitoring is the
+  one sitting in the call, and that machine plays nothing continuously — so the monitor fell
+  back to the system default output, which on a Mac whose output is being captured is a virtual
+  device. It played there and was never heard. Left alone it still follows **Play audio on**,
+  or the system default, which is the right answer on a Mac with speakers.
+
+### Fixed
+
+- **Clipboard sync stopped reaching a Mac after OpenBeam restarted on it.** The other Mac kept
+  knocking on the address the first one used before restarting, and could go on doing so until
+  it restarted too. It now follows the new one within seconds.
+
+- **The clipboard synced with sync turned off.** Another Mac that still had it on could send
+  this one its clipboard, and receive this one's, when they connected. With **Sync the
+  clipboard** off, nothing is sent or applied either way.
+
 ## [2.6.1] - 2026-09-16
 
 ### Fixed
@@ -224,7 +296,8 @@ captures a microphone raw, with no echo canceller of its own.
   as an NDI source on the local network, with a live preview, camera selection, macOS camera
   effects and statistics.
 
-[Unreleased]: https://github.com/manuelvegadev/OpenBeam/compare/v2.6.1...HEAD
+[Unreleased]: https://github.com/manuelvegadev/OpenBeam/compare/v2.7.0...HEAD
+[2.7.0]: https://github.com/manuelvegadev/OpenBeam/compare/v2.6.1...v2.7.0
 [2.6.1]: https://github.com/manuelvegadev/OpenBeam/compare/v2.6.0...v2.6.1
 [2.6.0]: https://github.com/manuelvegadev/OpenBeam/compare/v2.5.0...v2.6.0
 [2.5.0]: https://github.com/manuelvegadev/OpenBeam/compare/v2.4.0...v2.5.0
