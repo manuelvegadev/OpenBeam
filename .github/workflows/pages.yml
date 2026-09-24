@@ -32,6 +32,16 @@ concurrency:
 
 jobs:
   deploy:
+    # A release pushes main and its tag together, and the tag's run deploys this
+    # same commit with the new feed. When the release also touched site/**, the
+    # push to main deployed the commit first, with the feed from before the
+    # release, and Pages kept that deployment: the tag's one for the same commit
+    # reported success and changed nothing. Measured on v2.8.1, whose update
+    # nobody was offered until the site was deployed again. The tag's run
+    # builds the site from the same commit, so skipping this loses nothing.
+    if: >-
+      !(github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      startsWith(github.event.head_commit.message, 'chore(build): release '))
     runs-on: ubuntu-latest
     environment:
       name: github-pages
