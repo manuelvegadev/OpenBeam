@@ -141,6 +141,31 @@ Not done because the correction has not been seen to fire: NDI clocks its own
 audio and a LAN's jitter fits inside the cushion. It is worth building the first
 time someone reports a click on a long call.
 
+## Compress the remote screen when it leaves Thunderbolt
+
+**Impact: 8–10 fps instead of 60–120 whenever the cable is out.** Remote screen
+sends raw BGRA (SCREEN-PROTOCOL.md), which is right for a Thunderbolt Bridge —
+~67 Gbit/s measured, and a whole 3440×1440 frame goes out in ~5 ms — and hopeless
+anywhere else. With the cable pulled on 2026-09-23, the viewer reconnected over
+Wi-Fi as designed and the host dropped to half size and 60 fps as the spec says
+for slower links (1994×1296 from the MacBook's own 3024×1964 panel). Moving
+windows still changed more than 60 % of the screen at a time, so every frame went
+whole: 46 of 46 sent in five seconds, ~10 MB each, ~109 ms apiece at the
+~760 Mbit/s the Wi-Fi gave. A still screen costs nothing — only changed regions
+travel — but any scroll or window drag is a full frame.
+
+Kept as it is, deliberately: the fallback exists so a session survives a loose
+cable, not for working over Wi-Fi.
+
+The fix is a second video path used only off Thunderbolt: HEVC through
+VideoToolbox's hardware encoder with low-latency rate control, no B-frames and
+intra refresh instead of keyframes, at a bitrate chosen for the link (tens of
+Mbit/s gives smooth 60 fps at this size). It needs a new FRAME variant carrying
+an encoded picture instead of rects, negotiated in `screen.request`/`screen.offer`
+so an older peer keeps getting raw pixels, and a VTDecompressionSession on the
+viewer feeding the same Metal canvas. Expect a few milliseconds of encode and
+decode and some softening of fine text — the trade Thunderbolt makes unnecessary.
+
 ## Unverified
 
 The preview intro animation has not been looked at since the cleanup pass that

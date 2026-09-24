@@ -251,6 +251,10 @@ Either side may send. The transfer's partial state is discarded by the receiver.
 
 Optional. Either side may send. Idle connections SHOULD be pinged once before the 5-min idle timeout fires.
 
+### `screen.request`, `screen.offer`, `screen.decline`, `screen.stop`, `screen.displays`, `screen.select` — remote screen
+
+Set up and tear down a remote screen session, whose pixels and input then travel on connections of their own. Specified in [SCREEN-PROTOCOL.md](SCREEN-PROTOCOL.md). An implementation without remote screen support ignores them like any unknown `kind`.
+
 ## Pairing
 
 When the initiator's `hello` is verified by the responder and the responder finds **no matching paired peer**, the connection is in `unpaired` state. The initiator may now send:
@@ -431,6 +435,7 @@ Cross-implementation interop should be brought up by running both sides against 
 
 ## Change Log
 
+- **v1 (2026-09-23)**: listed the `screen.*` payload kinds, which carry the control messages of the Remote Screen Protocol (SCREEN-PROTOCOL.md). No change to existing frames or payloads.
 - **v1 (2026-09-16)**: added the optional `paste` field to `share.begin`, so a copied picture can arrive as a picture rather than as a file. Backwards compatible in both directions: an implementation that ignores the key still receives the PNG as a file.
 - **v1 (2026-09-16)**: clarified the handshake's ordering and signature binding — the responder sends its `hello` only after verifying the initiator's, because its signature binds the initiator's `sigPub`; removed the contradictory "peer's sigPub if known from a prior pairing" line from the `sig` pseudocode. Added `pair_accept` to the frames an `unpaired` peer may send (an initiator receives one in that state), and said explicitly that disallowed frames are dropped rather than closed. Added "Re-pairing". No wire-format change: same frames, same fields, same crypto.
 - **v1 (2026-05-12)**: initial revision.
