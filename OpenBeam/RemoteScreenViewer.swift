@@ -491,9 +491,10 @@ final class RemoteScreenStats: @unchecked Sendable {
 }
 
 extension NSScreen {
-    /// Where a remote screen shows best by default: a screen refreshing at the
-    /// host's own rate, so every frame lasts exactly one refresh (a 120 Hz host on
-    /// a 165 Hz screen measurably judders), otherwise the main screen.
+    /// Where a remote screen shows best when nobody said where: a screen
+    /// refreshing at the host's own rate, so every frame lasts exactly one
+    /// refresh (a 120 Hz host on a 165 Hz screen measurably judders), otherwise
+    /// the main screen.
     static func bestForRemoteScreen(refreshHz: Double) -> NSScreen? {
         screens.first { abs(Double($0.maximumFramesPerSecond) - refreshHz) < 1 } ?? main
     }

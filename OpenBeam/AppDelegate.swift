@@ -1683,7 +1683,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func viewRemoteScreen(_ sender: NSMenuItem) {
         guard let peerID = sender.representedObject as? String,
               let peer = clipSyncManager.pairedPeers.first(where: { $0.peerID == peerID }) else { return }
-        clipSyncManager.remoteScreen.view(peer)
+        // Every display has its own menu bar with this menu in it; the window
+        // opens on the one the menu was opened from, which is where the pointer is.
+        let screen = NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }
+        clipSyncManager.remoteScreen.view(peer, on: screen)
     }
 
     @objc private func stopRemoteControl(_ sender: Any) {

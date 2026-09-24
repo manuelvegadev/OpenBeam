@@ -108,6 +108,8 @@ final class RemoteScreenPlugin: @unchecked Sendable {
         var timeout: DispatchWorkItem?
         /// While a dropped session is being re-established: when to give up.
         var reconnectUntil: Date?
+        /// Where the window opens: the display the user asked from.
+        var displayID: CGDirectDisplayID?
     }
     private var viewing: [String: Viewing] = [:]
 
@@ -130,8 +132,9 @@ final class RemoteScreenPlugin: @unchecked Sendable {
 
     // MARK: - Viewing another Mac
 
-    /// Asks `peer` for its screen; the window opens when the offer arrives. Main thread.
-    func view(_ peer: PairedPeer) {
+    /// Asks `peer` for its screen; the window opens when the offer arrives, on
+    /// `screen` if given — the display the user asked from. Main thread.
+    func view(_ peer: PairedPeer, on screen: NSScreen? = nil) {
         if let window = viewing[peer.peerID]?.window?.window {
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
@@ -142,6 +145,7 @@ final class RemoteScreenPlugin: @unchecked Sendable {
             alert("\(peer.displayName) can't be reached", "It isn't on this network right now, or ClipSync can't find it.")
             return
         }
+        viewing[peer.peerID]?.displayID = screen?.displayID
         if RemoteScreenPreferences.capturesSystemShortcuts, !InputInjector.hasPermission(prompt: false) {
             // Without it the viewer still works, but global shortcuts stay here.
             _ = InputInjector.hasPermission(prompt: true)
@@ -193,7 +197,8 @@ final class RemoteScreenPlugin: @unchecked Sendable {
         let name = name(of: peerID)
         var window = entry.window
         let isNew = window == nil
-        if window == nil, let screen = NSScreen.bestForRemoteScreen(refreshHz: offer.display.refreshHz) {
+        let asked = entry.displayID.flatMap { id in NSScreen.screens.first { $0.displayID == id } }
+        if window == nil, let screen = asked ?? NSScreen.bestForRemoteScreen(refreshHz: offer.display.refreshHz) {
             let made = RemoteScreenWindowController(on: screen, title: name,
                                                     aspect: CGSize(width: offer.display.width, height: offer.display.height),
                                                     showsStats: RemoteScreenPreferences.showsStats)
