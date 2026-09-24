@@ -411,7 +411,12 @@ final class RemoteScreenPlugin: @unchecked Sendable {
                 return
             }
             pluginLog.info("offered this screen to \(peerID, privacy: .public)")
-            DispatchQueue.main.async { self.onStateChanged?() }
+            DispatchQueue.main.async {
+                // A sleeping display stops capture, and an idle Mac would sleep
+                // under the person driving it from elsewhere.
+                KeepAwake.shared.hold(.remoteControl)
+                self.onStateChanged?()
+            }
         } catch {
             pluginLog.error("could not open a session: \(String(describing: error), privacy: .public)")
             decline("other")
@@ -426,7 +431,10 @@ final class RemoteScreenPlugin: @unchecked Sendable {
         guard current else { return }
         let stop = ScreenStopPayload(sessionID: session.sessionID, reason: reason.rawValue, originID: identity.peerID)
         if let data = try? ClipSyncJSON.encoder.encode(stop) { _ = send?(data, peerID) }
-        DispatchQueue.main.async { self.onStateChanged?() }
+        DispatchQueue.main.async {
+            KeepAwake.shared.release(.remoteControl)
+            self.onStateChanged?()
+        }
     }
 
     /// Ends the session this Mac hosts, from the host's own side.

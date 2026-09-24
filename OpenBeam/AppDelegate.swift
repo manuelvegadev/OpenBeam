@@ -208,6 +208,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var ndiSourceSubmenu: NSMenu!
     private var listenSubmenu: NSMenu!
     private var remoteScreenSubmenu: NSMenu!
+    private var keepAwakeSubmenu: NSMenu!
     private var playbackSubmenu: NSMenu!
     private var statsSubmenu: NSMenu!
 
@@ -305,9 +306,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if self.settingsWindow?.isVisible == true { self.settingsModel?.refresh() }
         }
         clipSyncManager.start()
+        KeepAwake.shared.launch()
+        // The menu reads its state when it opens; only settings needs telling.
+        KeepAwake.shared.onChange = { [weak self] in
+            guard let self, self.settingsWindow?.isVisible == true else { return }
+            self.settingsModel?.refresh()
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        KeepAwake.shared.shutdown()
         stopStatsTimer()
         stopLevelTimer()
         cameraController.stop()
@@ -533,6 +541,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         remoteScreenSubmenu.delegate = self
         remoteScreenItem.submenu = remoteScreenSubmenu
         add(remoteScreenItem, to: menu)
+
+        let keepAwakeItem = NSMenuItem(title: "Keep Awake", action: nil, keyEquivalent: "")
+        keepAwakeSubmenu = NSMenu()
+        keepAwakeSubmenu.delegate = self
+        keepAwakeItem.submenu = keepAwakeSubmenu
+        add(keepAwakeItem, to: menu)
 
         menu.addItem(.separator())
 
@@ -1346,6 +1360,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         button.setAccessibilityLabel(hosting ? "OpenBeam — this Mac is being controlled" : "OpenBeam")
     }
 
+    // MARK: - Keep awake
+
+    private func updateKeepAwakeSubmenu(_ menu: NSMenu) {
+        menu.removeAllItems()
+        let awake = KeepAwake.shared
+        if let until = awake.manualUntil {
+            _ = addDisabledItem(to: menu, title: "On until \(until.formatted(date: .omitted, time: .shortened))")
+        } else if awake.reasons.contains(.remoteControl), !awake.reasons.contains(.manual) {
+            _ = addDisabledItem(to: menu, title: "On while this Mac is being controlled")
+        }
+        let off = NSMenuItem(title: "Off", action: #selector(keepAwakeOff(_:)), keyEquivalent: "")
+        off.target = self
+        off.state = awake.reasons.contains(.manual) ? .off : .on
+        menu.addItem(off)
+        let hours = DateComponentsFormatter()
+        hours.unitsStyle = .full
+        hours.allowedUnits = [.hour]
+        for duration in KeepAwake.durations {
+            let title = duration.flatMap { hours.string(from: $0).map { "For \($0)" } } ?? "Indefinitely"
+            let item = NSMenuItem(title: title, action: #selector(keepAwakeFor(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = duration
+            // A timed session shows its end time above rather than a check here.
+            item.state = duration == nil && awake.reasons.contains(.manual) && awake.manualUntil == nil ? .on : .off
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+        let display = NSMenuItem(title: "Keep Display On", action: #selector(toggleKeepDisplayOn(_:)), keyEquivalent: "")
+        display.target = self
+        display.state = awake.keepsDisplayOn ? .on : .off
+        menu.addItem(display)
+        let lid = NSMenuItem(title: "Even With the Lid Closed", action: #selector(toggleLidClosed(_:)), keyEquivalent: "")
+        lid.target = self
+        lid.state = awake.staysAwakeLidClosed ? .on : .off
+        menu.addItem(lid)
+    }
+
+    @objc private func keepAwakeOff(_ sender: Any) {
+        KeepAwake.shared.stopManual()
+    }
+
+    @objc private func keepAwakeFor(_ sender: NSMenuItem) {
+        KeepAwake.shared.startManual(for: sender.representedObject as? TimeInterval)
+    }
+
+    @objc private func toggleKeepDisplayOn(_ sender: Any) {
+        KeepAwake.shared.keepsDisplayOn.toggle()
+    }
+
+    /// Asks for the one-time authorization the first time it is turned on.
+    @objc private func toggleLidClosed(_ sender: Any) {
+        let awake = KeepAwake.shared
+        if !awake.staysAwakeLidClosed, !awake.lidClosedAuthorized {
+            NSApp.activate(ignoringOtherApps: true)
+            guard awake.authorizeLidClosed() else { return }
+        }
+        awake.staysAwakeLidClosed.toggle()
+    }
+
     /// Brings up the update Sparkle already found in the background. Asking it
     /// to check again is what re-presents that update — it is still in hand, so
     /// nothing is downloaded twice.
@@ -1524,6 +1597,8 @@ extension AppDelegate: NSMenuDelegate {
             updateListenSubmenu(menu)
         } else if menu === remoteScreenSubmenu {
             updateRemoteScreenSubmenu(menu)
+        } else if menu === keepAwakeSubmenu {
+            updateKeepAwakeSubmenu(menu)
         }
     }
 

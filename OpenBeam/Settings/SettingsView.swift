@@ -114,6 +114,38 @@ private struct GeneralPane: View {
             } header: {
                 Text("Sending")
             }
+
+            Section {
+                Toggle(isOn: Binding(
+                    get: { model.keepAwakeDisplayOn },
+                    set: { model.setKeepAwakeDisplayOn($0) }
+                )) {
+                    Text("Keep the display on")
+                    Text("While Keep Awake is on, the screen stays lit too, not just the Mac.")
+                }
+
+                Toggle(isOn: Binding(
+                    get: { model.keepAwakeLidClosed },
+                    set: { model.setKeepAwakeLidClosed($0) }
+                )) {
+                    Text("Even with the lid closed")
+                    Text("Without an external display, macOS sleeps on closing the lid whatever else says. Turning this on asks for your password once. On battery it lets go below \(KeepAwake.batteryFloor) %.")
+                }
+
+                if model.keepAwakeLidAuthorized {
+                    LabeledContent("Lid-closed permission") {
+                        Button("Remove…") { model.removeKeepAwakeLidAuthorization() }
+                    }
+                }
+            } header: {
+                Text("Keep Awake")
+            } footer: {
+                Text("Turn Keep Awake on from the menu bar. OpenBeam also keeps this Mac awake by itself while another Mac is controlling it.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .formStyle(.grouped)
     }

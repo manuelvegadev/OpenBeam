@@ -29,6 +29,9 @@ final class SettingsModel {
     private(set) var openAtLogin = false
     private(set) var openAtLoginNeedsApproval = false
     private(set) var sendsUYVY = false
+    private(set) var keepAwakeDisplayOn = true
+    private(set) var keepAwakeLidClosed = false
+    private(set) var keepAwakeLidAuthorized = false
 
     // Updates
     private(set) var checksAutomatically = false
@@ -81,6 +84,9 @@ final class SettingsModel {
         openAtLogin = loginItem.isOn
         openAtLoginNeedsApproval = loginItem.requiresApproval
         sendsUYVY = camera.pixelFormat == .uyvy422
+        keepAwakeDisplayOn = KeepAwake.shared.keepsDisplayOn
+        keepAwakeLidClosed = KeepAwake.shared.staysAwakeLidClosed
+        keepAwakeLidAuthorized = KeepAwake.shared.lidClosedAuthorized
 
         checksAutomatically = updater.automaticallyChecksForUpdates
         downloadsAutomatically = updater.automaticallyDownloadsUpdates
@@ -182,6 +188,27 @@ final class SettingsModel {
 
     func forget(_ peer: PairedPeer) {
         clipSync.unpair(peerID: peer.peerID)
+    }
+
+    // MARK: - Keep awake
+    // KeepAwake announces its changes through `onChange`, which refreshes this.
+
+    func setKeepAwakeDisplayOn(_ on: Bool) {
+        KeepAwake.shared.keepsDisplayOn = on
+    }
+
+    /// The first time on, asks for the one-time authorization; off if refused.
+    func setKeepAwakeLidClosed(_ on: Bool) {
+        let awake = KeepAwake.shared
+        if on, !awake.lidClosedAuthorized, !awake.authorizeLidClosed() {
+            refresh()
+            return
+        }
+        awake.staysAwakeLidClosed = on
+    }
+
+    func removeKeepAwakeLidAuthorization() {
+        KeepAwake.shared.removeLidClosedAuthorization()
     }
 
     // MARK: - Remote screen
