@@ -700,16 +700,30 @@ final class RemoteScreenWindowController: NSWindowController, NSWindowDelegate {
     /// the clicks. Hiding it through presentation options works on the main
     /// display only, so on entering full screen the window is also lifted above
     /// the menu bar's level: wherever the menu bar appears, it appears beneath.
+    /// The window's own title bar comes down with the menu bar, from a window
+    /// of its own that AppKit keeps above this one, and those options no longer
+    /// hold once another app has been active; so in full screen that title bar
+    /// is emptied and lets clicks through. ⌃⌥⌘F leaves full screen.
     func window(_ window: NSWindow, willUseFullScreenPresentationOptions proposedOptions: NSApplication.PresentationOptions = []) -> NSApplication.PresentationOptions {
         [.fullScreen, .hideDock, .hideMenuBar]
     }
 
     func windowDidEnterFullScreen(_ notification: Notification) {
         window?.level = NSWindow.Level(rawValue: NSWindow.Level.mainMenu.rawValue + 1)
+        setFullScreenTitlebarHidden(true)
     }
 
     func windowWillExitFullScreen(_ notification: Notification) {
+        setFullScreenTitlebarHidden(false)
         window?.level = .normal
+    }
+
+    /// The title bar that slides down in full screen: the window its buttons
+    /// are in, which is not the viewer's own while in full screen.
+    private func setFullScreenTitlebarHidden(_ hidden: Bool) {
+        guard let window, let titlebar = window.standardWindowButton(.closeButton)?.window, titlebar !== window else { return }
+        titlebar.contentView?.isHidden = hidden
+        titlebar.ignoresMouseEvents = hidden
     }
 
     func windowWillClose(_ notification: Notification) {
