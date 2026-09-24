@@ -29,6 +29,11 @@ final class RemoteScreenInput {
     var localKeys: ((UInt16) -> Bool)?
     /// While true, the pointer stays on this Mac (the picker is open over the picture).
     var pointerSuspended = false
+    /// The pointer came onto the picture (true) or left it (false). Main queue.
+    var onPointerCrossing: ((Bool) -> Void)?
+    /// The pointer left the picture with a button held: the drag is still the
+    /// host's, and the pointer counts as gone once the button comes up.
+    private var leftWhileHeld = false
 
     init(viewer: RemoteScreenViewer) {
         self.viewer = viewer
@@ -37,6 +42,12 @@ final class RemoteScreenInput {
     // MARK: - Pointer
 
     func mouse(_ event: NSEvent, in view: ScreenView) {
+        defer {
+            if leftWhileHeld, NSEvent.pressedMouseButtons == 0 {
+                leftWhileHeld = false
+                onPointerCrossing?(false)
+            }
+        }
         guard !pointerSuspended else { return }
         let (x, y) = normalized(event, in: view)
         let kind: InputEventMessage.Kind
@@ -70,12 +81,23 @@ final class RemoteScreenInput {
     }
 
     func pointerEntered() {
+        leftWhileHeld = false
+        hideCursor()
+        onPointerCrossing?(true)
+    }
+
+    func pointerExited() {
+        showCursor()
+        if NSEvent.pressedMouseButtons != 0 { leftWhileHeld = true } else { onPointerCrossing?(false) }
+    }
+
+    private func hideCursor() {
         guard !cursorHidden else { return }
         NSCursor.hide()  // the host's own cursor is in the picture
         cursorHidden = true
     }
 
-    func pointerExited() {
+    private func showCursor() {
         guard cursorHidden else { return }
         NSCursor.unhide()
         cursorHidden = false
@@ -144,7 +166,7 @@ final class RemoteScreenInput {
 
     /// Lets go of everything on the host, for when this window stops receiving input.
     func releaseAll() {
-        pointerExited()
+        showCursor()
         viewer?.releaseAll()
     }
 }

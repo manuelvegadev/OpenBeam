@@ -578,6 +578,7 @@ final class RemoteScreenWindowController: NSWindowController, NSWindowDelegate {
         screenView = view
         let input = RemoteScreenInput(viewer: viewer)
         input.onLocalCommand = { [weak self] command in self?.run(command) }
+        input.onPointerCrossing = { [weak self] inside in self?.pointerCrossed(inside: inside) }
         view.input = input
         self.input = input
         self.viewer = viewer
@@ -619,6 +620,26 @@ final class RemoteScreenWindowController: NSWindowController, NSWindowDelegate {
         screenView?.input = nil
         input = nil
         viewer = nil
+    }
+
+    // MARK: - Keyboard follows the pointer
+
+    /// As with a software KVM, the keyboard goes where the pointer is. Leaving
+    /// the picture hands it back to this Mac, so a shortcut pressed with the
+    /// pointer on another display (⌘Space for Raycast) runs here, not on the
+    /// host. In full screen the picture is a display of its own, so coming back
+    /// onto it takes the keyboard without a click.
+    private func pointerCrossed(inside: Bool) {
+        guard let window else { return }
+        if inside {
+            guard window.styleMask.contains(.fullScreen), !(NSApp.isActive && window.isKeyWindow) else { return }
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKey()
+        } else {
+            if picker.isInteractive { hidePicker() }
+            // Resigning key lets go of everything on the host (windowDidResignKey).
+            if NSApp.isActive, window.isKeyWindow { NSApp.deactivate() }
+        }
     }
 
     // MARK: - Host displays
