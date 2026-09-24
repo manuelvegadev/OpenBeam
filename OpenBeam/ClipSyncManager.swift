@@ -220,9 +220,12 @@ extension ClipSyncManager: ClipSyncConnectionDelegate {
             }
             oldSession?.cancel()
 
-            // Send a snapshot of the current text clipboard (if any).
-            clipboard.sendSnapshot { [weak c] payload in
-                c?.sendEncrypted(payload: payload)
+            // Send a snapshot of the current text clipboard (if any), only while
+            // syncing: the other side can open a session with this one either way.
+            if isEnabled {
+                clipboard.sendSnapshot { [weak c] payload in
+                    c?.sendEncrypted(payload: payload)
+                }
             }
         } else {
             // Connection waits for a pair_request (responder) or sends one (initiator).
@@ -321,9 +324,13 @@ extension ClipSyncManager: ClipSyncConnectionDelegate {
         }
         mgrLog.info("recv: kind=\(kind, privacy: .public), \(data.count, privacy: .public) bytes from peer=\(c.peerID ?? "?", privacy: .public)")
         switch kind {
+        // With syncing off, a peer that still has it on can open a session with
+        // this one; what it sends must not land on this clipboard.
         case "clipboard.text", "clipboard.text.snapshot":
+            guard isEnabled else { return }
             clipboard.handleInbound(payloadData: data)
         case "share.begin", "share.chunk", "share.end", "share.cancel":
+            guard isEnabled else { return }
             share.handleInbound(payloadData: data, kind: kind)
         case "ping":
             if let ping = try? ClipSyncJSON.decoder.decode(PingPayload.self, from: data) {
