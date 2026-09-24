@@ -11,6 +11,17 @@ deciding whether to take the update — not assembled from commit subjects.
 
 ## [Unreleased]
 
+## [2.7.2] - 2026-09-23
+
+### Fixed
+
+- **Permissions survive updates.** Every update until now made macOS treat OpenBeam as a
+  new app: Screen Recording and Accessibility still looked allowed in System Settings but no
+  longer applied, and had to be removed and added again by hand. OpenBeam is now signed with
+  a certificate of its own, which macOS recognises from one version to the next. **This
+  update needs them granted once more** — remove OpenBeam from each list in Privacy &
+  Security, add it again, and reopen it — and from here on updates keep them.
+
 ## [2.7.1] - 2026-09-23
 
 ### Fixed
@@ -305,7 +316,8 @@ captures a microphone raw, with no echo canceller of its own.
   as an NDI source on the local network, with a live preview, camera selection, macOS camera
   effects and statistics.
 
-[Unreleased]: https://github.com/manuelvegadev/OpenBeam/compare/v2.7.1...HEAD
+[Unreleased]: https://github.com/manuelvegadev/OpenBeam/compare/v2.7.2...HEAD
+[2.7.2]: https://github.com/manuelvegadev/OpenBeam/compare/v2.7.1...v2.7.2
 [2.7.1]: https://github.com/manuelvegadev/OpenBeam/compare/v2.7.0...v2.7.1
 [2.7.0]: https://github.com/manuelvegadev/OpenBeam/compare/v2.6.1...v2.7.0
 [2.6.1]: https://github.com/manuelvegadev/OpenBeam/compare/v2.6.0...v2.6.1
