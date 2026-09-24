@@ -46,9 +46,42 @@ enum AudioDevices {
     /// which is the order the Sound pane uses, so the menu matches it.
     static func outputs() -> [Device] {
         allDevices().compactMap { id in
-            guard channelCount(id, scope: kAudioObjectPropertyScopeOutput) > 0 else { return nil }
+            guard channelCount(id, scope: kAudioObjectPropertyScopeOutput) > 0,
+                  !isPrivateAggregate(id)
+            else { return nil }
             return device(id)
         }
+    }
+
+    /// Whether this device is an aggregate somebody built to make something
+    /// work, rather than one a user assembled in Audio MIDI Setup.
+    ///
+    /// A private aggregate is hidden from the Sound pane and from every other
+    /// process — but not from the one that created it, and that one is us.
+    /// `SystemAudioTap` builds one around every tap, so choosing to send the
+    /// system audio put "OpenBeam System Audio" in our own list of speakers;
+    /// CoreAudio builds its own, `CADefaultDeviceAggregate-<pid>`, for a
+    /// client that follows the default device, and that turned up beside it.
+    /// Neither is a place anyone means when they name a speaker.
+    ///
+    /// Being private is the property that makes them ours to hide rather than
+    /// the name either happens to carry: a device only this process can see is
+    /// by definition not one the user chose. Confirmed by running the same
+    /// enumeration from a separate process, which sees neither.
+    private static func isPrivateAggregate(_ id: AudioDeviceID) -> Bool {
+        var address = address(kAudioAggregateDevicePropertyComposition)
+        // Absent on anything that is not an aggregate, which is most devices.
+        guard AudioObjectHasProperty(id, &address) else { return false }
+
+        var size = UInt32(MemoryLayout<CFDictionary?>.size)
+        var composition: Unmanaged<CFDictionary>?
+        guard AudioObjectGetPropertyData(id, &address, 0, nil, &size, &composition) == noErr,
+              let dictionary = composition?.takeRetainedValue() as? [String: Any]
+        else { return false }
+
+        // CFBoolean comes back as a bridged Bool; a plain aggregate has no
+        // such key at all.
+        return dictionary[kAudioAggregateDeviceIsPrivateKey] as? Bool == true
     }
 
     static func defaultOutput() -> Device? {
