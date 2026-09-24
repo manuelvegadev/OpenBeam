@@ -11,6 +11,23 @@ deciding whether to take the update — not assembled from commit subjects.
 
 ## [Unreleased]
 
+## [2.8.0] - 2026-09-24
+
+### Added
+
+- **The keyboard follows the pointer.** As with Deskflow, keys go where the pointer is: move
+  it off the other Mac's picture and the keyboard is this Mac's again, so **⌘Space** with the
+  pointer on another display opens this Mac's Raycast, not the other Mac's. In full screen,
+  moving back onto the picture hands the keyboard over without a click; a viewer in a window
+  still takes a click, so a pointer resting on it never catches what you type elsewhere.
+
+### Fixed
+
+- **The title bar no longer slides down in full screen.** After clicking another app and
+  coming back, hovering the top of the screen brought the viewer's title bar down over the
+  other Mac's menu bar, where it took the clicks. Full screen now shows only the other Mac's
+  menu bar there; **⌃⌥⌘F** leaves full screen.
+
 ## [2.7.4] - 2026-09-23
 
 ### Fixed
@@ -343,7 +360,8 @@ captures a microphone raw, with no echo canceller of its own.
   as an NDI source on the local network, with a live preview, camera selection, macOS camera
   effects and statistics.
 
-[Unreleased]: https://github.com/manuelvegadev/OpenBeam/compare/v2.7.4...HEAD
+[Unreleased]: https://github.com/manuelvegadev/OpenBeam/compare/v2.8.0...HEAD
+[2.8.0]: https://github.com/manuelvegadev/OpenBeam/compare/v2.7.4...v2.8.0
 [2.7.4]: https://github.com/manuelvegadev/OpenBeam/compare/v2.7.3...v2.7.4
 [2.7.3]: https://github.com/manuelvegadev/OpenBeam/compare/v2.7.2...v2.7.3
 [2.7.2]: https://github.com/manuelvegadev/OpenBeam/compare/v2.7.1...v2.7.2
