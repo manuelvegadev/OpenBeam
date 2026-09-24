@@ -19,13 +19,14 @@
 import AVFoundation
 import os
 
-/// Plays back what a capture just handed to NDI, on an output of the user's
-/// choosing, so that a stream can be judged before it leaves the machine.
+/// Plays back a capture on an output of the user's choosing: in Send, what was
+/// just handed to NDI, so that a stream can be judged before it leaves the
+/// machine; in Receive, `NDI Audio` as the call hears it.
 ///
-/// The received side of the same question needs none of this: that stream
-/// already has an `AudioOutputPlayer` behind "Play audio on", and monitoring
-/// it is a matter of giving that player somewhere to play rather than building
-/// a second engine on the same audio.
+/// Receive deliberately does not monitor the stream as it comes off the
+/// network. NDI Tools' driver receives that by itself, and it can break the
+/// audio on its own while the network copy sounds perfect — which is how a
+/// 44.1 kHz `NDI Audio` went unnoticed behind a monitor that sounded fine.
 final class AudioMonitor: @unchecked Sendable {
 
     private let player = AudioOutputPlayer()
