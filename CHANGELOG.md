@@ -11,6 +11,25 @@ deciding whether to take the update — not assembled from commit subjects.
 
 ## [Unreleased]
 
+## [2.7.3] - 2026-09-23
+
+### Changed
+
+- **The viewer opens on the display you asked from.** Every display's menu bar has OpenBeam
+  in it; choosing **Remote Screen → View** from one now opens the other Mac there, instead of
+  always on the display matching its refresh rate.
+
+### Fixed
+
+- **Full screen works on every display.** On a display other than the main one, this Mac's
+  menu bar still slid down over the other Mac's in full screen and took its clicks. The
+  viewer's full screen now covers the whole display, menu bar and Dock included, on any
+  display. It no longer takes a desktop of its own: **⌃⌥⌘F** or the green button enters and
+  leaves it, **⌃⌥⌘W** closes the viewer.
+
+- **The menu bar icon stays white.** It turned black on any Mac that had used Remote Screen.
+  It now only changes while another Mac is in control, to orange.
+
 ## [2.7.2] - 2026-09-23
 
 ### Fixed
@@ -316,7 +335,8 @@ captures a microphone raw, with no echo canceller of its own.
   as an NDI source on the local network, with a live preview, camera selection, macOS camera
   effects and statistics.
 
-[Unreleased]: https://github.com/manuelvegadev/OpenBeam/compare/v2.7.2...HEAD
+[Unreleased]: https://github.com/manuelvegadev/OpenBeam/compare/v2.7.3...HEAD
+[2.7.3]: https://github.com/manuelvegadev/OpenBeam/compare/v2.7.2...v2.7.3
 [2.7.2]: https://github.com/manuelvegadev/OpenBeam/compare/v2.7.1...v2.7.2
 [2.7.1]: https://github.com/manuelvegadev/OpenBeam/compare/v2.7.0...v2.7.1
 [2.7.0]: https://github.com/manuelvegadev/OpenBeam/compare/v2.6.1...v2.7.0
