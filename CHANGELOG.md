@@ -11,6 +11,14 @@ deciding whether to take the update — not assembled from commit subjects.
 
 ## [Unreleased]
 
+## [2.7.4] - 2026-09-23
+
+### Fixed
+
+- **Full screen takes a desktop of its own again.** In 2.7.3 it covered the current desktop
+  instead, on top of that desktop's other windows. It is back to a normal full-screen space
+  — and still keeps this Mac's menu bar from covering the other Mac's, on every display.
+
 ## [2.7.3] - 2026-09-23
 
 ### Changed
@@ -335,7 +343,8 @@ captures a microphone raw, with no echo canceller of its own.
   as an NDI source on the local network, with a live preview, camera selection, macOS camera
   effects and statistics.
 
-[Unreleased]: https://github.com/manuelvegadev/OpenBeam/compare/v2.7.3...HEAD
+[Unreleased]: https://github.com/manuelvegadev/OpenBeam/compare/v2.7.4...HEAD
+[2.7.4]: https://github.com/manuelvegadev/OpenBeam/compare/v2.7.3...v2.7.4
 [2.7.3]: https://github.com/manuelvegadev/OpenBeam/compare/v2.7.2...v2.7.3
 [2.7.2]: https://github.com/manuelvegadev/OpenBeam/compare/v2.7.1...v2.7.2
 [2.7.1]: https://github.com/manuelvegadev/OpenBeam/compare/v2.7.0...v2.7.1
