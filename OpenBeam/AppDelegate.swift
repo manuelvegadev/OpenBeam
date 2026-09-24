@@ -43,6 +43,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Properties
 
     private var statusItem: NSStatusItem!
+    /// The menu bar icon as built, a template macOS draws in the menu bar's own color.
+    private var statusIcon: NSImage?
     private var previewLayer: CALayer!
     private var menuIsOpen = false
     /// The preview is emptied on close, so the next frame fades back in.
@@ -376,6 +378,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 icon.size = NSSize(width: 18, height: 18)
                 icon.isTemplate = true
                 button.image = icon
+                statusIcon = icon
             } else {
                 button.image = NSImage(systemSymbolName: "camera.fill",
                                        accessibilityDescription: "OpenBeam")
@@ -1694,12 +1697,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// While another Mac controls this one, the menu bar icon says so in color:
-    /// the one place that is always on screen.
+    /// the one place that is always on screen. An orange copy of the icon rather
+    /// than `contentTintColor`: once that property is touched — even set back to
+    /// nil — the button stops drawing its template in the menu bar's color and
+    /// draws it black, which is how the icon went dark on any Mac that used
+    /// remote screen.
     private func updateRemoteScreenIndicator() {
-        guard let button = statusItem.button else { return }
+        guard let button = statusItem.button, let icon = statusIcon else { return }
         let hosting = clipSyncManager.remoteScreen.hostingPeerID != nil
-        button.contentTintColor = hosting ? .systemOrange : nil
+        button.image = hosting ? Self.tinted(icon, .systemOrange) : icon
         button.setAccessibilityLabel(hosting ? "OpenBeam — this Mac is being controlled" : "OpenBeam")
+    }
+
+    /// `image` filled with `color`, drawn as is rather than as a template.
+    private static func tinted(_ image: NSImage, _ color: NSColor) -> NSImage {
+        let copy = NSImage(size: image.size, flipped: false) { rect in
+            image.draw(in: rect)
+            color.set()
+            rect.fill(using: .sourceAtop)
+            return true
+        }
+        copy.isTemplate = false
+        return copy
     }
 
     // MARK: - Keep awake
