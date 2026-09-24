@@ -3,6 +3,17 @@
     <channel>
         <title>OpenBeam</title>
         <item>
+            <title>2.8.0</title>
+            <pubDate>Thu, 24 Sep 2026 16:46:36 +0000</pubDate>
+            <link>https://openbeam.manuelvega.dev</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/manuelvegadev/OpenBeam/releases</sparkle:fullReleaseNotesLink>
+            <sparkle:version>2.8.0</sparkle:version>
+            <sparkle:shortVersionString>2.8.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.7</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/manuelvegadev/OpenBeam/releases/download/v2.8.0/OpenBeam-2.8.0.zip" length="7234958" type="application/octet-stream" sparkle:edSignature="CmvE7Vvka0iCUO4m8J02XcI25oNBA2meb8bnImMfBFwecf4M5I6V8EvTCvuhOWDux09kv/krPnnbzWQeKccXAg=="/>
+        </item>
+        <item>
             <title>2.7.4</title>
             <pubDate>Thu, 24 Sep 2026 01:42:20 +0000</pubDate>
             <link>https://openbeam.manuelvega.dev</link>
