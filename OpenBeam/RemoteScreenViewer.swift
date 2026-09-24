@@ -499,6 +499,16 @@ extension NSScreen {
     }
 }
 
+/// A window that can take the keyboard while borderless, and whose full screen
+/// — the green button, ⌃⌥⌘F — is the controller's own rather than macOS's.
+private final class RemoteScreenWindow: NSWindow {
+    var onToggleFullScreen: (() -> Void)?
+
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+    override func toggleFullScreen(_ sender: Any?) { onToggleFullScreen?() }
+}
+
 /// The window a remote screen is shown in. It outlives any one session: when a
 /// session drops, the last picture stays up under a status line while the
 /// plugin reconnects, and the next session is attached to the same window,
@@ -520,6 +530,9 @@ final class RemoteScreenWindowController: NSWindowController, NSWindowDelegate {
     private var statsTimer: Timer?
     private var seconds = 0
     private let showsStats: Bool
+    /// What full screen replaced, to put back when it ends.
+    private var covered: (frame: NSRect, style: NSWindow.StyleMask)?
+    private var screensObserver: NSObjectProtocol?
 
     init(on screen: NSScreen, title: String, aspect: CGSize, showsStats: Bool) {
         self.showsStats = showsStats
@@ -535,8 +548,8 @@ final class RemoteScreenWindowController: NSWindowController, NSWindowDelegate {
         status.backgroundColor = NSColor.black.withAlphaComponent(0.65)
         status.isHidden = true
         status.translatesAutoresizingMaskIntoConstraints = false
-        let window = NSWindow(contentRect: frame, styleMask: [.titled, .closable, .miniaturizable, .resizable],
-                              backing: .buffered, defer: false, screen: screen)
+        let window = RemoteScreenWindow(contentRect: frame, styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                                        backing: .buffered, defer: false, screen: screen)
         window.title = title
         window.contentView = container
         window.backgroundColor = .black
@@ -545,6 +558,12 @@ final class RemoteScreenWindowController: NSWindowController, NSWindowDelegate {
         window.acceptsMouseMovedEvents = true
         super.init(window: window)
         window.delegate = self
+        window.onToggleFullScreen = { [weak self] in self?.toggleFullScreen() }
+        screensObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
+                                                                 object: nil, queue: .main) { [weak self] _ in
+            guard let self, self.covered != nil, let window = self.window, let screen = window.screen else { return }
+            window.setFrame(screen.frame, display: true)
+        }
         picker.frame = container.bounds
         picker.autoresizingMask = [.width, .height]
         picker.isHidden = true
@@ -591,8 +610,9 @@ final class RemoteScreenWindowController: NSWindowController, NSWindowDelegate {
             guard let viewer else { return }
             viewer.stats.presented(info, at: time, clockOffsetNs: viewer.clockOffsetNs, refreshInterval: refreshInterval)
         }
-        view.onRemoteSizeChange = { [weak window] size in
-            window?.contentAspectRatio = size
+        view.onRemoteSizeChange = { [weak self] size in
+            guard let self, self.covered == nil else { return }  // full screen fills the display regardless
+            self.window?.contentAspectRatio = size
         }
         if RemoteScreenPreferences.capturesSystemShortcuts {
             let capture = SystemKeyboardCapture(input: input, window: window) { [weak window] in
@@ -690,18 +710,41 @@ final class RemoteScreenWindowController: NSWindowController, NSWindowDelegate {
         status.isHidden = text == nil
     }
 
+    // MARK: - Full screen
+
+    /// Full screen here is the other Mac's screen edge to edge, its own menu bar
+    /// along the top of the picture. macOS full screen would put this Mac's menu
+    /// bar over it on hover, taking the clicks, and hiding that with presentation
+    /// options only works on the main display. So full screen is a borderless
+    /// window that covers the whole display from above the menu bar and the
+    /// Dock, where neither can appear over it, on any display.
+    private func toggleFullScreen() {
+        guard let window else { return }
+        if let saved = covered {
+            covered = nil
+            window.level = .normal
+            window.styleMask = saved.style
+            window.hasShadow = true
+            window.setFrame(saved.frame, display: true)
+            if let size = screenView?.remoteSize { window.contentAspectRatio = size }
+        } else {
+            guard let screen = window.screen else { return }
+            covered = (window.frame, window.styleMask)
+            window.styleMask = [.borderless]
+            window.level = NSWindow.Level(rawValue: NSWindow.Level.mainMenu.rawValue + 1)
+            window.hasShadow = false
+            window.contentResizeIncrements = NSSize(width: 1, height: 1)  // lifts the aspect-ratio constraint
+            window.setFrame(screen.frame, display: true)
+        }
+        window.makeKeyAndOrderFront(nil)
+        if let screenView { window.makeFirstResponder(screenView) }
+    }
+
     func windowWillClose(_ notification: Notification) {
+        if let screensObserver { NotificationCenter.default.removeObserver(screensObserver) }
         statsTimer?.invalidate()
         detach()
         onClose?()
-    }
-
-    /// Full screen here is the other Mac's screen edge to edge, its own menu bar
-    /// at the top of the picture. This Mac's menu bar and title bar, which slide
-    /// down when the pointer reaches that edge, would sit over it and take the
-    /// clicks meant for it, so in full screen they stay hidden, the Dock too.
-    func window(_ window: NSWindow, willUseFullScreenPresentationOptions proposedOptions: NSApplication.PresentationOptions = []) -> NSApplication.PresentationOptions {
-        [.fullScreen, .hideDock, .hideMenuBar]
     }
 
     /// Input stops reaching this window, so nothing may stay held on the host.

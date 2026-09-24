@@ -118,7 +118,7 @@ final class RemoteScreenInput {
         let action: () -> Void
         switch keyCode {
         case 3: action = { window?.toggleFullScreen(nil) }  // kVK_ANSI_F
-        case 13: action = { window?.performClose(nil) }  // kVK_ANSI_W
+        case 13: action = { window?.close() }  // kVK_ANSI_W; a borderless full-screen window has no close button to "perform"
         case 15: action = { [weak self] in  // kVK_ANSI_R: let go, and give the keyboard back to this Mac
             self?.releaseAll()
             NSApp.deactivate()
