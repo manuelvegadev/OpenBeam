@@ -74,11 +74,13 @@ On B, leave **Play audio on** at `None` in this setup: A's voice is already goin
 call as a virtual microphone, and playing it out of B's speakers as well would only put it
 in B's room.
 
-To hear what the call hears, press the headphones beside the meter on B. In Receive they
-play the microphone the audio is going into, captured the way the call captures it, not the
-stream as it came off the network. With **Play audio on** set to a loopback such as BlackHole,
-that is the loopback's input. Otherwise it is `NDI Audio`, which receives the stream on its
-own and can break it on its own.
+To listen on B, press the headphones beside the meter. With **Play audio on** set to a
+loopback such as BlackHole, they play the loopback's input, captured the way the call
+captures it. Otherwise they play the stream as it came off the network. `NDI Audio`
+receives the stream on its own, and OpenBeam never opens it to listen: that driver shares
+its audio out between the apps reading it, so a second reader breaks the voice for the call.
+The same goes for any other app you point at `NDI Audio` while in a call, such as a
+recorder or a dictation app.
 
 The microphone the audio goes into has to run at the stream's rate, 48 kHz for NDI:
 `NDI Audio` at 44.1 kHz cuts the voice into short pieces while the stream on the network is

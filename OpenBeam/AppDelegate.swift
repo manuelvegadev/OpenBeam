@@ -60,12 +60,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let ndiAudioReceiver = NDIAudioReceiver()
     private let audioPlayer = AudioOutputPlayer()
     private let audioMonitor = AudioMonitor()
-    /// What the Receive monitor listens to: the microphone the received audio
-    /// reaches the call through, opened the way the call opens it. Its own
-    /// capture rather than the one behind the Audio picker, which is sending
-    /// this machine's audio back at the time.
-    private let virtualMicCapture = AudioController()
-    private var virtualMicCaptureUID: String?
+    /// What the Receive monitor listens to when OpenBeam plays into a
+    /// loopback: that loopback's input, opened the way the call opens it. Its
+    /// own capture rather than the one behind the Audio picker, which is
+    /// sending this machine's audio back at the time.
+    private let loopbackCapture = AudioController()
+    private var loopbackCaptureUID: String?
     private let audioHealth = AudioHealth()
     private let audioHealthNotifier = AudioHealthNotifier()
     /// Shown at the top of the menu when the audio path has been dropping
@@ -387,7 +387,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ndiAudioReceiver.stop()
         audioPlayer.stop()
         audioMonitor.stop()
-        virtualMicCapture.stop()
+        loopbackCapture.stop()
         ndiFinder.stop()
         clipSyncManager.stop()
         netMonitor.stop()
@@ -846,9 +846,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.audioMonitor.play(buffer.audioBufferList, format: buffer.format)
         }
 
-        // In Receive, what the monitor plays: the virtual microphone as the
-        // call hears it. Not sent anywhere — it came off the network already.
-        virtualMicCapture.onAudio = { [weak self] buffer in
+        // In Receive, what the monitor plays when the audio goes into a
+        // loopback: its input, as the call hears it. Not sent anywhere — it
+        // came off the network already.
+        loopbackCapture.onAudio = { [weak self] buffer in
             self?.audioMonitor.play(buffer.audioBufferList, format: buffer.format)
         }
 
@@ -1009,27 +1010,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private enum MonitoredAudio { case capture, virtualMicrophone }
+    private enum MonitoredAudio { case capture, loopback, received }
 
     /// What the monitor button offers to play, which is the audio the meter is
     /// showing: the capture this machine is putting on the network, or — in
-    /// Receive — the virtual microphone the received audio is going into.
+    /// Receive — what the call hears, as closely as it can be heard without
+    /// disturbing it.
     ///
-    /// Receive used to play the stream as it came off the network, through
-    /// OpenBeam's own player. That is not what the call hears: `NDI Audio` is
-    /// NDI Tools' driver and receives the stream by itself, and when it broke
-    /// the voice into pieces at 44.1 kHz, the monitor went on sounding clean.
-    /// A monitor that reassures you while the call is hearing something else
-    /// is worse than none, so this one listens where the call does.
+    /// When OpenBeam plays into the microphone itself, through a loopback,
+    /// the monitor opens that microphone the way the call does: a loopback
+    /// hands every reader the same audio, so one more costs the call nothing.
     ///
-    /// Nil when there is nothing to hear: no audio being sent, or no
-    /// microphone the received audio reaches.
+    /// When a driver receives the stream by itself, as `NDI Audio` does, the
+    /// monitor plays the stream as it came off the network instead. Opening
+    /// that microphone was tried, and it broke the call: `NDI Audio` splits
+    /// its audio between the apps reading it rather than giving each a copy,
+    /// so a second reader left the call ~60 ms of voice then ~30 ms of
+    /// silence, over and over. The network copy cannot show a fault in the
+    /// driver, but listening must never be what causes one.
+    ///
+    /// Nil when there is nothing to hear, and nil when the stream is already
+    /// coming out of a speaker here: a second engine on the same audio would
+    /// only play it twice.
     private var monitoredAudio: MonitoredAudio? {
         switch mode {
         case .send:
             return publishesAudio ? .capture : nil
         case .receive:
-            return receiveMicrophone != nil ? .virtualMicrophone : nil
+            if receiveMicrophone?.isLoopback == true { return .loopback }
+            guard playbackTarget == nil else { return nil }
+            return listenSource != nil ? .received : nil
         }
     }
 
@@ -1048,14 +1058,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Resolved once per `reconcile` and read from here: the meter asks 30
     /// times a second while monitoring, and each answer is several CoreAudio
     /// round-trips. Nil in Send, which feeds no microphone.
-    private var receiveMicrophone: AudioDevices.Device?
+    private var receiveMicrophone: ReceiveMicrophone?
 
-    private func resolveReceiveMicrophone() -> AudioDevices.Device? {
+    private struct ReceiveMicrophone {
+        let device: AudioDevices.Device
+        /// OpenBeam plays into it, as opposed to a driver receiving the
+        /// stream on its own. Only such a microphone can be listened to
+        /// without disturbing the call.
+        let isLoopback: Bool
+    }
+
+    private func resolveReceiveMicrophone() -> ReceiveMicrophone? {
         guard mode == .receive else { return nil }
         if let device = playbackTarget?.resolvedDevice, AudioDevices.hasInput(device.id) {
-            return device
+            return ReceiveMicrophone(device: device, isLoopback: true)
         }
-        return AudioDevices.ndiAudio()
+        return AudioDevices.ndiAudio().map { ReceiveMicrophone(device: $0, isLoopback: false) }
     }
 
     /// The rate of the stream the Receive microphone carries, when this Mac is
@@ -1068,7 +1086,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// every reconcile and on the health tick, which is what catches the
     /// stream's rate becoming known with the menu closed.
     private func syncMicrophoneRate() {
-        guard let microphone = receiveMicrophone else {
+        guard let microphone = receiveMicrophone?.device else {
             microphoneRate.watch(nil)
             return
         }
@@ -1079,12 +1097,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// monitor falls back to "Play audio on" for its output, and in Receive
     /// that is exactly the loopback it is listening to.
     private var monitorFeedsBack: Bool {
-        guard monitorsVirtualMicrophone, let microphone = receiveMicrophone else { return false }
+        guard monitorsLoopback, let microphone = receiveMicrophone?.device else { return false }
         return monitorOutput.resolvedDevice?.uid == microphone.uid
     }
 
     private var monitorsCapture: Bool { isMonitoring && monitoredAudio == .capture }
-    private var monitorsVirtualMicrophone: Bool { isMonitoring && monitoredAudio == .virtualMicrophone }
+    private var monitorsLoopback: Bool { isMonitoring && monitoredAudio == .loopback }
+    private var monitorsReceived: Bool { isMonitoring && monitoredAudio == .received }
 
     /// Where the monitor plays, once the user has said.
     ///
@@ -1111,7 +1130,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// The monitor's own player, fed by the capture in Send and by the
-    /// virtual microphone in Receive.
+    /// loopback microphone in Receive. The received stream needs none of it:
+    /// that already has a player, and monitoring it is `playbackDestination`'s
+    /// business.
     private func syncAudioMonitor() {
         // A monitor left on with nothing to play is a lit button that does
         // nothing: the source it was turned on for has been switched off or
@@ -1121,19 +1142,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Compared with the device last asked for rather than the one the
         // capture opened: while the microphone permission is being asked for,
         // nothing is open yet, and starting again on every tick would ask again.
-        let microphone = monitorsVirtualMicrophone ? receiveMicrophone : nil
-        if microphone?.uid != virtualMicCaptureUID {
-            virtualMicCaptureUID = microphone?.uid
+        let microphone = monitorsLoopback ? receiveMicrophone?.device : nil
+        if microphone?.uid != loopbackCaptureUID {
+            loopbackCaptureUID = microphone?.uid
             if let microphone {
-                virtualMicCapture.start(deviceID: microphone.uid)
+                loopbackCapture.start(deviceID: microphone.uid)
             } else {
-                virtualMicCapture.stop()
+                loopbackCapture.stop()
             }
         }
 
         // Left lit but silent while it would feed back: the line under the
         // meter says why, and its submenu is where the way out is.
-        if isMonitoring && !monitorFeedsBack {
+        if (monitorsCapture || monitorsLoopback) && !monitorFeedsBack {
             audioMonitor.start(target: monitorOutput)
         } else {
             audioMonitor.stop()
@@ -1155,7 +1176,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// somewhere to play it, menu open or closed. Listening to the other
     /// machine is not something you do only while a menu is on screen.
     private func syncAudioPlayback() {
-        guard let destination = playbackTarget, let source = listenSource else {
+        guard let destination = playbackDestination, let source = listenSource else {
             if ndiAudioReceiver.isRunning { audioHealth.streamEnded() }
             ndiAudioReceiver.stop()
             audioPlayer.stop()
@@ -1167,6 +1188,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !(ndiAudioReceiver.isRunning && ndiAudioReceiver.sourceName == source) else { return }
         audioHealth.streamEnded()
         ndiAudioReceiver.start(source: source)
+    }
+
+    /// Where the received stream comes out. The monitor is the second reason
+    /// to play it at all: the user chose nowhere, and pressing the button asks
+    /// to hear it anyway. Deliberately not written back to `playbackTarget` —
+    /// monitoring is a way of listening to a stream for a minute, not a routing
+    /// choice to be remembered and found still in force a week later.
+    private var playbackDestination: AudioOutputTarget? {
+        if let playbackTarget { return playbackTarget }
+        return monitorsReceived ? monitorOutput : nil
     }
 
     /// Discovery and the preview receiver run while the menu is on screen —
@@ -1381,11 +1412,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case (false, .capture):
             monitorButton.toolTip = "Listen to what this Mac is sending — on headphones, "
                 + "or the microphone will hear it back"
-        case (false, .virtualMicrophone):
-            monitorButton.toolTip = "Listen to \(receiveMicrophone?.name ?? "the microphone") — "
+        case (false, .loopback):
+            monitorButton.toolTip = "Listen to \(receiveMicrophone?.device.name ?? "the microphone") — "
                 + "exactly what the call hears"
+        case (false, .received):
+            monitorButton.toolTip = "Listen to what this Mac is receiving"
         case (false, nil):
-            monitorButton.toolTip = "Nothing to listen to"
+            monitorButton.toolTip = (playbackTarget != nil && listenSource != nil)
+                ? "Already playing on \(Self.name(of: playbackTarget))"
+                : "Nothing to listen to"
         }
 
         monitorItem?.isHidden = !playing
@@ -1824,7 +1859,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .send:
             return capturePeak ?? (audioPlayer.isPlaying ? audioPlayer.currentPeak : 0)
         case .receive:
-            if monitorsVirtualMicrophone { return virtualMicCapture.currentPeak }
+            if monitorsLoopback { return loopbackCapture.currentPeak }
             return audioPlayer.isPlaying ? audioPlayer.currentPeak : ndiReceiver.currentPeak
         }
     }

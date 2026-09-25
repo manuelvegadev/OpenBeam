@@ -21,12 +21,12 @@ import os
 
 /// Plays back a capture on an output of the user's choosing: in Send, what was
 /// just handed to NDI, so that a stream can be judged before it leaves the
-/// machine; in Receive, `NDI Audio` as the call hears it.
+/// machine; in Receive, the loopback OpenBeam plays into, as the call hears it.
 ///
-/// Receive deliberately does not monitor the stream as it comes off the
-/// network. NDI Tools' driver receives that by itself, and it can break the
-/// audio on its own while the network copy sounds perfect — which is how a
-/// 44.1 kHz `NDI Audio` went unnoticed behind a monitor that sounded fine.
+/// Receive never opens a microphone that a driver fills by itself, such as
+/// `NDI Audio`: that driver splits its audio between the apps reading it, so
+/// listening to it broke the call. There the received stream is monitored
+/// instead, through its own player — see `AppDelegate.monitoredAudio`.
 final class AudioMonitor: @unchecked Sendable {
 
     private let player = AudioOutputPlayer()
