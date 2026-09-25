@@ -11,6 +11,19 @@ deciding whether to take the update — not assembled from commit subjects.
 
 ## [Unreleased]
 
+## [2.8.2] - 2026-09-25
+
+### Fixed
+
+- **Monitoring in Receive no longer breaks your voice in the call.** Since 2.8.1 the monitor
+  opened `NDI Audio` to play what the call hears. That driver shares its audio out between
+  the apps reading it instead of giving each a copy, so while monitoring, the call got about
+  60 ms of voice and then 30 ms of silence, over and over. With `NDI Audio`, the monitor
+  now plays the stream as it came off the network. It still captures the loopback when
+  **Play audio on** points at one such as BlackHole, which gives every reader the same audio.
+  Any other app reading `NDI Audio` during a call, like a recorder or a dictation app, has
+  the same effect.
+
 ## [2.8.1] - 2026-09-24
 
 ### Fixed
@@ -378,7 +391,8 @@ captures a microphone raw, with no echo canceller of its own.
   as an NDI source on the local network, with a live preview, camera selection, macOS camera
   effects and statistics.
 
-[Unreleased]: https://github.com/manuelvegadev/OpenBeam/compare/v2.8.1...HEAD
+[Unreleased]: https://github.com/manuelvegadev/OpenBeam/compare/v2.8.2...HEAD
+[2.8.2]: https://github.com/manuelvegadev/OpenBeam/compare/v2.8.1...v2.8.2
 [2.8.1]: https://github.com/manuelvegadev/OpenBeam/compare/v2.8.0...v2.8.1
 [2.8.0]: https://github.com/manuelvegadev/OpenBeam/compare/v2.7.4...v2.8.0
 [2.7.4]: https://github.com/manuelvegadev/OpenBeam/compare/v2.7.3...v2.7.4
