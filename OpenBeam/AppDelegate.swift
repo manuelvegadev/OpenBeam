@@ -66,6 +66,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// sending this machine's audio back at the time.
     private let loopbackCapture = AudioController()
     private var loopbackCaptureUID: String?
+    /// The call's microphone, while the monitor holds it exclusively.
+    private let exclusiveMicrophone = ExclusiveMicrophone()
+    private let terminationSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+    /// Where that microphone meets the system audio when the monitor is sent
+    /// to the other machine rather than played here.
+    private let monitorMix = MonitorMix()
     private let audioHealth = AudioHealth()
     private let audioHealthNotifier = AudioHealthNotifier()
     /// Shown at the top of the menu when the audio path has been dropping
@@ -135,6 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     private static let playbackOutputDefaultsKey = "playbackOutput"
     private static let monitorOutputDefaultsKey = "monitorOutput"
+    private static let exclusiveMonitorWarningKey = "suppressExclusiveMonitorWarning"
     private static let listenSourceDefaultsKey = "listenSource"
     /// Stored for "send nothing", which a missing key cannot mean: that is a
     /// machine that has never chosen, and it sends its microphone.
@@ -308,6 +315,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #if DEBUG
         if RemoteScreenTestHarness.runIfRequested() { return }
         #endif
+        // A plain `kill` quits like the menu's Quit, so whatever the app has
+        // borrowed from the system — the call's microphone, a muted input —
+        // is given back on the way out rather than left behind.
+        signal(SIGTERM, SIG_IGN)
+        terminationSource.setEventHandler { NSApp.terminate(nil) }
+        terminationSource.resume()
         let saved = AppMode(rawValue: UserDefaults.standard.string(forKey: Self.modeDefaultsKey) ?? "") ?? .send
         modeState.withLock { $0 = saved }
         for mode in [AppMode.send, .receive] {
@@ -388,6 +401,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         audioPlayer.stop()
         audioMonitor.stop()
         loopbackCapture.stop()
+        exclusiveMicrophone.release()
         ndiFinder.stop()
         clipSyncManager.stop()
         netMonitor.stop()
@@ -850,7 +864,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // loopback: its input, as the call hears it. Not sent anywhere — it
         // came off the network already.
         loopbackCapture.onAudio = { [weak self] bufferList, format in
-            self?.audioMonitor.play(bufferList, format: format)
+            guard let self else { return }
+            if self.monitorMix.isActive {
+                self.monitorMix.mix(bufferList, format: format) { self.ndiSender.send(planar: $0) }
+            } else {
+                self.audioMonitor.play(bufferList, format: format)
+            }
         }
 
         // The other thing that can fill the same stream. Only one of the two
@@ -858,7 +877,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // reach the sender at once.
         systemAudioTap.onAudio = { [weak self] bufferList, format in
             guard let self else { return }
-            self.ndiSender.send(audio: bufferList, format: format)
+            // While the call's microphone is monitored from the other machine,
+            // the microphone paces what is sent and this goes under it.
+            if self.monitorMix.isActive {
+                self.monitorMix.addBackground(bufferList, format: format)
+            } else {
+                self.ndiSender.send(audio: bufferList, format: format)
+            }
             self.audioMonitor.play(bufferList, format: format)
         }
 
@@ -1010,7 +1035,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private enum MonitoredAudio { case capture, loopback, received }
+    private enum MonitoredAudio { case capture, loopback, exclusive, received }
 
     /// What the monitor button offers to play, which is the audio the meter is
     /// showing: the capture this machine is putting on the network, or — in
@@ -1022,22 +1047,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// hands every reader the same audio, so one more costs the call nothing.
     ///
     /// When a driver receives the stream by itself, as `NDI Audio` does, the
-    /// monitor plays the stream as it came off the network instead. Opening
-    /// that microphone was tried, and it broke the call: `NDI Audio` splits
-    /// its audio between the apps reading it rather than giving each a copy,
-    /// so a second reader left the call ~60 ms of voice then ~30 ms of
-    /// silence, over and over. The network copy cannot show a fault in the
-    /// driver, but listening must never be what causes one.
+    /// monitor takes that microphone exclusively and is its only reader.
+    /// Sharing it was tried, and it broke the call: `NDI Audio` splits its
+    /// audio between the apps reading it rather than giving each a copy, so a
+    /// second reader left the call ~60 ms of voice then ~30 ms of silence,
+    /// over and over. The stream as it came off the network was monitored
+    /// instead for a while, and it answered a different question — it never
+    /// passes through the driver, so a driver fault sounded fine in it. Taking
+    /// the microphone costs the call its audio while monitoring, which the
+    /// user is told before it starts, and in exchange it is the call's own
+    /// microphone that is heard.
     ///
-    /// Nil when there is nothing to hear, and nil when the stream is already
-    /// coming out of a speaker here: a second engine on the same audio would
-    /// only play it twice.
+    /// The received stream is still the answer when there is no microphone
+    /// to monitor. Nil when there is nothing to hear, and nil when that stream
+    /// is already coming out of a speaker here: a second engine on the same
+    /// audio would only play it twice.
     private var monitoredAudio: MonitoredAudio? {
         switch mode {
         case .send:
             return publishesAudio ? .capture : nil
         case .receive:
-            if receiveMicrophone?.isLoopback == true { return .loopback }
+            if let microphone = receiveMicrophone { return microphone.isLoopback ? .loopback : .exclusive }
             guard playbackTarget == nil else { return nil }
             return listenSource != nil ? .received : nil
         }
@@ -1097,12 +1127,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// monitor falls back to "Play audio on" for its output, and in Receive
     /// that is exactly the loopback it is listening to.
     private var monitorFeedsBack: Bool {
-        guard monitorsLoopback, let microphone = receiveMicrophone?.device else { return false }
+        guard monitorsMicrophone, let microphone = receiveMicrophone?.device else { return false }
         return monitorOutput.resolvedDevice?.uid == microphone.uid
     }
 
     private var monitorsCapture: Bool { isMonitoring && monitoredAudio == .capture }
-    private var monitorsLoopback: Bool { isMonitoring && monitoredAudio == .loopback }
+    /// Receive's monitor opening the call's microphone, shared or taken.
+    private var monitorsMicrophone: Bool {
+        isMonitoring && (monitoredAudio == .loopback || monitoredAudio == .exclusive)
+    }
     private var monitorsReceived: Bool { isMonitoring && monitoredAudio == .received }
 
     /// Where the monitor plays, once the user has said.
@@ -1142,19 +1175,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Compared with the device last asked for rather than the one the
         // capture opened: while the microphone permission is being asked for,
         // nothing is open yet, and starting again on every tick would ask again.
-        let microphone = monitorsLoopback ? receiveMicrophone?.device : nil
+        let microphone = monitorsMicrophone ? receiveMicrophone?.device : nil
         if microphone?.uid != loopbackCaptureUID {
+            // Closed before it is given back, so the call never shares it with
+            // a reader on its way out.
+            loopbackCapture.stop()
+            exclusiveMicrophone.release()
             loopbackCaptureUID = microphone?.uid
+
             if let microphone {
-                loopbackCapture.start(deviceID: microphone.uid)
-            } else {
-                loopbackCapture.stop()
+                // Never opened unless it was taken: sharing it is exactly
+                // what breaks the call.
+                if monitoredAudio == .exclusive, !exclusiveMicrophone.take(microphone) {
+                    isMonitoring = false
+                    loopbackCaptureUID = nil
+                    audioHealthNotifier.notify(
+                        title: "Can't monitor \(microphone.name)",
+                        body: "Another app is using it exclusively.")
+                }
+                if isMonitoring { loopbackCapture.start(deviceID: microphone.uid) }
             }
         }
 
+        // A monitor pointed at the output being sent is a monitor meant for
+        // the other machine: on a Mac nobody sits at, that is the only place
+        // it can be heard. It goes into the stream itself — a tap does not
+        // capture the process that made it, so playing it there reaches no
+        // one (see `MonitorMix`).
+        //
+        // Compared with the device the tap was asked for, not the one it has
+        // open: that one is nil while the tap is being rebuilt.
+        var monitorIsSent = false
+        if monitorsMicrophone, !monitorFeedsBack, case .output(let tapped) = audioSource {
+            monitorIsSent = tapped.resolvedDevice.map { $0.uid == monitorOutput.resolvedDevice?.uid } ?? false
+        }
+        monitorMix.setActive(monitorIsSent)
+
         // Left lit but silent while it would feed back: the line under the
         // meter says why, and its submenu is where the way out is.
-        if (monitorsCapture || monitorsLoopback) && !monitorFeedsBack {
+        if (monitorsCapture || monitorsMicrophone) && !monitorFeedsBack && !monitorIsSent {
             audioMonitor.start(target: monitorOutput)
         } else {
             audioMonitor.stop()
@@ -1406,15 +1465,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             monitorButton.setAccessibilityLabel(playing ? "Stop monitoring audio" : "Monitor audio")
         }
 
+        let microphone = receiveMicrophone?.device.name ?? "the microphone"
+
         switch (playing, monitored) {
+        case (true, .exclusive):
+            monitorButton.toolTip = "Stop listening and give \(microphone) back to the call"
         case (true, _):
             monitorButton.toolTip = "Stop listening"
         case (false, .capture):
             monitorButton.toolTip = "Listen to what this Mac is sending — on headphones, "
                 + "or the microphone will hear it back"
         case (false, .loopback):
-            monitorButton.toolTip = "Listen to \(receiveMicrophone?.device.name ?? "the microphone") — "
-                + "exactly what the call hears"
+            monitorButton.toolTip = "Listen to \(microphone) — exactly what the call hears"
+        case (false, .exclusive):
+            monitorButton.toolTip = "Listen to \(microphone) — exactly what the call hears. "
+                + "While you listen, \(microphone) is taken from every other app, "
+                + "so the call will not hear you."
         case (false, .received):
             monitorButton.toolTip = "Listen to what this Mac is receiving"
         case (false, nil):
@@ -1862,7 +1928,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .send:
             return capturePeak ?? (audioPlayer.isPlaying ? audioPlayer.currentPeak : 0)
         case .receive:
-            if monitorsLoopback { return loopbackCapture.currentPeak }
+            if monitorsMicrophone { return loopbackCapture.currentPeak }
             return audioPlayer.isPlaying ? audioPlayer.currentPeak : ndiReceiver.currentPeak
         }
     }
@@ -2104,9 +2170,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// control in this menu it changes nothing that is remembered — pressing it
     /// is a question about right now.
     @objc private func toggleAudioMonitor(_ sender: NSButton) {
-        isMonitoring.toggle()
+        if !isMonitoring, monitoredAudio == .exclusive,
+           !UserDefaults.standard.bool(forKey: Self.exclusiveMonitorWarningKey) {
+            // Asked outside the menu: an alert cannot run while it tracks.
+            statusItem.menu?.cancelTracking()
+            DispatchQueue.main.async { self.confirmExclusiveMonitor() }
+            return
+        }
+        setMonitoring(!isMonitoring)
+    }
+
+    private func setMonitoring(_ on: Bool) {
+        isMonitoring = on
         reconcile()
         refreshMonitor()
+    }
+
+    /// Said before the monitor takes the call's microphone, because what it
+    /// costs — the call stops hearing you — is not something a button next to
+    /// a meter would lead anyone to expect.
+    private func confirmExclusiveMonitor() {
+        let microphone = receiveMicrophone?.device.name ?? "the microphone"
+        let alert = NSAlert()
+        alert.messageText = "Monitoring takes \(microphone) from every other app"
+        alert.informativeText = "\(microphone) splits its audio between the apps reading it, "
+            + "so OpenBeam listens to it alone. While you listen, the call and anything else "
+            + "using \(microphone) will not hear your microphone, and the microphone macOS "
+            + "switches them to is muted. Everything is put back when you stop."
+        alert.addButton(withTitle: "Monitor")
+        alert.addButton(withTitle: "Cancel")
+        alert.showsSuppressionButton = true
+
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        if alert.suppressionButton?.state == .on {
+            UserDefaults.standard.set(true, forKey: Self.exclusiveMonitorWarningKey)
+        }
+
+        // The situation may have moved while the alert was up.
+        guard monitoredAudio == .exclusive else { return }
+        setMonitoring(true)
     }
 
     @objc private func selectMonitorOutput(_ sender: NSMenuItem) {

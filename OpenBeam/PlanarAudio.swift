@@ -23,6 +23,29 @@ struct PlanarAudio {
 
 // MARK: - Gathering a capture into one
 
+/// Float storage grown to the largest block asked for and then reused, for
+/// the audio threads: a fresh array per block is a malloc on an I/O thread
+/// every 10 ms. Owned by value, so whoever holds it decides how it is guarded.
+struct FloatStorage {
+    private var data: UnsafeMutablePointer<Float>?
+    private var capacity = 0
+
+    mutating func buffer(for count: Int) -> UnsafeMutablePointer<Float> {
+        if let data, capacity >= count { return data }
+        data?.deallocate()
+        let grown = UnsafeMutablePointer<Float>.allocate(capacity: max(count, 1))
+        data = grown
+        capacity = max(count, 1)
+        return grown
+    }
+
+    mutating func release() {
+        data?.deallocate()
+        data = nil
+        capacity = 0
+    }
+}
+
 /// Turns what a capture hands over — an `AudioBufferList` in whatever layout
 /// its device happens to use — into one planar block, in storage that is
 /// reused rather than allocated per call.
@@ -42,27 +65,7 @@ final class PlanarAudioScratch: @unchecked Sendable {
     /// The lock is uncontended — one capture path runs at a time — and it is
     /// what keeps a switch between the microphone and the tap from handing the
     /// same buffer to two threads.
-    private let storage = OSAllocatedUnfairLock(initialState: Storage())
-
-    private struct Storage {
-        private var data: UnsafeMutablePointer<Float>?
-        private var capacity = 0
-
-        mutating func buffer(for count: Int) -> UnsafeMutablePointer<Float>? {
-            if capacity < count {
-                data?.deallocate()
-                data = .allocate(capacity: count)
-                capacity = count
-            }
-            return data
-        }
-
-        mutating func release() {
-            data?.deallocate()
-            data = nil
-            capacity = 0
-        }
-    }
+    private let storage = OSAllocatedUnfairLock(initialState: FloatStorage())
 
     /// Runs `body` with the block gathered into the scratch — and not at all
     /// when the list is not float32 or carries no frames. The pointer it hands
@@ -83,7 +86,7 @@ final class PlanarAudioScratch: @unchecked Sendable {
         guard frames > 0 else { return }
 
         storage.withLock { storage in
-            guard let base = storage.buffer(for: frames * channels) else { return }
+            let base = storage.buffer(for: frames * channels)
 
             // `floatChannelData` is non-nil for an interleaved buffer too, with
             // one pointer instead of one per channel — so the layout has to be

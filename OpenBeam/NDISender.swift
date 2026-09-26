@@ -146,23 +146,28 @@ final class NDISender: @unchecked Sendable {
     /// Runs on the audio thread roughly every 10 ms; same reason as the
     /// video path for not hopping onto `queue` to read the handle.
     func send(audio bufferList: UnsafePointer<AudioBufferList>, format: AVAudioFormat) {
+        guard isActive else { return }
+        scratch.withPlanar(bufferList, format: format) { send(planar: $0) }
+    }
+
+    /// Audio already gathered into one planar block — the monitor mix, which
+    /// is assembled in its own storage before it goes out.
+    func send(planar audio: PlanarAudio) {
         guard let instance = liveInstance.withLock({ $0 }) else { return }
 
-        scratch.withPlanar(bufferList, format: format) { audio in
-            var frame = NDIlib_audio_frame_v2_t()
-            frame.sample_rate = Int32(audio.sampleRate)
-            frame.no_channels = Int32(audio.channelCount)
-            frame.no_samples = Int32(audio.frameCount)
-            frame.timecode = Int64(NDIlib_send_timecode_synthesize)
-            frame.p_data = UnsafeMutablePointer(mutating: audio.data)
-            frame.channel_stride_in_bytes = Int32(audio.channelStride * MemoryLayout<Float>.size)
-            frame.p_metadata = nil
-            frame.timestamp = 0
+        var frame = NDIlib_audio_frame_v2_t()
+        frame.sample_rate = Int32(audio.sampleRate)
+        frame.no_channels = Int32(audio.channelCount)
+        frame.no_samples = Int32(audio.frameCount)
+        frame.timecode = Int64(NDIlib_send_timecode_synthesize)
+        frame.p_data = UnsafeMutablePointer(mutating: audio.data)
+        frame.channel_stride_in_bytes = Int32(audio.channelStride * MemoryLayout<Float>.size)
+        frame.p_metadata = nil
+        frame.timestamp = 0
 
-            let start = DispatchTime.now().uptimeNanoseconds
-            NDIlib_send_send_audio_v2(instance, &frame)
-            health?.sent(in: Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000_000)
-        }
+        let start = DispatchTime.now().uptimeNanoseconds
+        NDIlib_send_send_audio_v2(instance, &frame)
+        health?.sent(in: Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000_000)
     }
 
     func restart() -> Bool {

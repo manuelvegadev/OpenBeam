@@ -84,10 +84,13 @@ enum AudioDevices {
         return dictionary[kAudioAggregateDeviceIsPrivateKey] as? Bool == true
     }
 
-    static func defaultOutput() -> Device? {
+    static func defaultOutput() -> Device? { defaultDevice(kAudioHardwarePropertyDefaultOutputDevice) }
+    static func defaultInput() -> Device? { defaultDevice(kAudioHardwarePropertyDefaultInputDevice) }
+
+    private static func defaultDevice(_ selector: AudioObjectPropertySelector) -> Device? {
         var id = AudioObjectID(kAudioObjectUnknown)
         var size = UInt32(MemoryLayout<AudioObjectID>.size)
-        var address = address(kAudioHardwarePropertyDefaultOutputDevice)
+        var address = address(selector)
         guard AudioObjectGetPropertyData(systemObject, &address, 0, nil, &size, &id) == noErr else { return nil }
         return device(id)
     }
@@ -146,6 +149,58 @@ enum AudioDevices {
     /// makes a microphone of it.
     static func hasInput(_ device: AudioDeviceID) -> Bool {
         channelCount(device, scope: kAudioObjectPropertyScopeInput) > 0
+    }
+
+    // MARK: - Exclusive access
+
+    /// Which process holds the device exclusively, or nil when nobody does.
+    private static func hogOwner(of device: AudioDeviceID) -> pid_t? {
+        var address = address(kAudioDevicePropertyHogMode)
+        var owner: pid_t = -1
+        var size = UInt32(MemoryLayout<pid_t>.size)
+        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &owner) == noErr, owner != -1
+        else { return nil }
+        return owner
+    }
+
+    /// Takes the device for this process alone, or gives it back. While it is
+    /// held, no other process can do I/O on it — which is the point for a
+    /// driver that splits its audio between readers instead of copying it.
+    ///
+    /// The property toggles rather than assigns, so the owner is read back
+    /// instead of trusting the write. The HAL gives the device back by itself
+    /// when the process exits, crash included.
+    @discardableResult
+    static func setHogged(_ hogged: Bool, device: AudioDeviceID) -> Bool {
+        let me = getpid()
+        let owner = hogOwner(of: device)
+        guard hogged ? owner != me : owner == me else { return true }
+        guard !hogged || owner == nil else { return false }
+
+        var address = address(kAudioDevicePropertyHogMode)
+        var value: pid_t = hogged ? me : -1
+        guard AudioObjectSetPropertyData(device, &address, 0, nil,
+                                         UInt32(MemoryLayout<pid_t>.size), &value) == noErr
+        else { return false }
+        return (hogOwner(of: device) == me) == hogged
+    }
+
+    /// An input's own mute, the one the Sound pane does not show but every
+    /// app reading the device hears. Nil when the device has none.
+    static func isInputMuted(_ device: AudioDeviceID) -> Bool? {
+        var address = address(kAudioDevicePropertyMute, scope: kAudioObjectPropertyScopeInput)
+        var muted: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &muted) == noErr else { return nil }
+        return muted != 0
+    }
+
+    @discardableResult
+    static func setInputMuted(_ muted: Bool, device: AudioDeviceID) -> Bool {
+        var address = address(kAudioDevicePropertyMute, scope: kAudioObjectPropertyScopeInput)
+        var value: UInt32 = muted ? 1 : 0
+        return AudioObjectSetPropertyData(device, &address, 0, nil,
+                                          UInt32(MemoryLayout<UInt32>.size), &value) == noErr
     }
 
     // MARK: - Sample rate

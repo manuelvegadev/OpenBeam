@@ -23,10 +23,10 @@ import os
 /// just handed to NDI, so that a stream can be judged before it leaves the
 /// machine; in Receive, the loopback OpenBeam plays into, as the call hears it.
 ///
-/// Receive never opens a microphone that a driver fills by itself, such as
-/// `NDI Audio`: that driver splits its audio between the apps reading it, so
-/// listening to it broke the call. There the received stream is monitored
-/// instead, through its own player — see `AppDelegate.monitoredAudio`.
+/// Receive only opens a microphone that a driver fills by itself, such as
+/// `NDI Audio`, after taking it exclusively: that driver splits its audio
+/// between the apps reading it, so listening alongside the call broke it —
+/// see `AppDelegate.monitoredAudio`.
 final class AudioMonitor: @unchecked Sendable {
 
     private let player = AudioOutputPlayer()
