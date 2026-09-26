@@ -140,16 +140,10 @@ final class NDISender: @unchecked Sendable {
         }
     }
 
-    func send(audioBuffer buffer: AVAudioPCMBuffer) {
-        send(audio: buffer.audioBufferList, format: buffer.format)
-    }
-
-    /// The shape both capture paths have underneath. The microphone's engine
-    /// hands out an `AVAudioPCMBuffer`; the tap has a raw buffer list, and
-    /// wrapping it in one of those per callback would be an object allocated on
-    /// the I/O thread only to be taken apart again here.
+    /// The shape both capture paths hand over: the microphone's sink and the
+    /// tap both deliver the raw buffer list the device filled.
     ///
-    /// Runs on the audio thread roughly every 10-20 ms; same reason as the
+    /// Runs on the audio thread roughly every 10 ms; same reason as the
     /// video path for not hopping onto `queue` to read the handle.
     func send(audio bufferList: UnsafePointer<AudioBufferList>, format: AVAudioFormat) {
         guard let instance = liveInstance.withLock({ $0 }) else { return }

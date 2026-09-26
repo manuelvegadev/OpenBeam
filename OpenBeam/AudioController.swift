@@ -18,14 +18,16 @@ final class AudioController: NSObject, @unchecked Sendable {
     private var engine: AVAudioEngine?
     private(set) var currentDeviceID: String?
 
-    var onAudio: ((AVAudioPCMBuffer) -> Void)?
+    /// Called on the I/O thread once per cycle, with the list the device just
+    /// filled. It is valid for the duration of the call and no longer.
+    var onAudio: ((UnsafePointer<AudioBufferList>, AVAudioFormat) -> Void)?
 
     /// Where a block that took too long is counted. Set by the one place that
     /// wires the pipeline; nil in any other use of this class.
     var health: AudioHealth?
 
-    // Most recent peak sample magnitude (linear 0…1). Written on the audio
-    // tap thread, read on main.
+    // Most recent peak sample magnitude (linear 0…1). Written on the I/O
+    // thread, read on main.
     private let peakLock = OSAllocatedUnfairLock(initialState: Float(0))
     var currentPeak: Float { peakLock.withLock { $0 } }
 
@@ -81,19 +83,27 @@ final class AudioController: NSObject, @unchecked Sendable {
             return
         }
 
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
-            guard let self else { return }
+        // A sink rather than a tap. `installTap` treats its buffer size as a
+        // hint and, on macOS, hands out 4096 frames whatever it is asked for —
+        // 85 ms at 48 kHz, which the listener waits for before the first sample
+        // of each block can leave, and which the far end's cushion then has to
+        // be big enough to ride out. The sink is called once per I/O cycle with
+        // the device's own buffer: 512 frames, measured, or about 10 ms.
+        let sink = AVAudioSinkNode { [weak self] _, frameCount, bufferList in
+            guard let self else { return noErr }
             // The whole block is timed, not just our part of it: what matters
             // to the device is when this thread comes back, and everything
             // downstream of here runs on it.
             let start = DispatchTime.now().uptimeNanoseconds
-            let peak = AudioLevel.peak(buffer)
-            self.peakLock.withLock { $0 = peak }
-            self.onAudio?(buffer)
-            self.health?.captured(frames: Int(buffer.frameLength),
+            self.peakLock.withLock { $0 = AudioLevel.peak(bufferList) }
+            self.onAudio?(bufferList, format)
+            self.health?.captured(frames: Int(frameCount),
                                   sampleRate: format.sampleRate,
                                   work: Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000_000)
+            return noErr
         }
+        engine.attach(sink)
+        engine.connect(input, to: sink, format: format)
 
         do {
             try engine.start()
@@ -102,15 +112,11 @@ final class AudioController: NSObject, @unchecked Sendable {
             print("[OpenBeam] Audio started: \(device.localizedName) — \(Int(format.sampleRate)) Hz, \(format.channelCount) ch")
         } catch {
             print("[OpenBeam] AVAudioEngine start failed: \(error)")
-            input.removeTap(onBus: 0)
         }
     }
 
     func stop() {
-        if let engine {
-            engine.inputNode.removeTap(onBus: 0)
-            engine.stop()
-        }
+        engine?.stop()
         engine = nil
         currentDeviceID = nil
         peakLock.withLock { $0 = 0 }

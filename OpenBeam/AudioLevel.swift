@@ -43,8 +43,4 @@ enum AudioLevel {
         }
         return min(peak, 1)
     }
-
-    static func peak(_ buffer: AVAudioPCMBuffer) -> Float {
-        peak(buffer.audioBufferList)
-    }
 }

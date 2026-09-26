@@ -840,17 +840,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // list the sender is, rather than a copy taken somewhere further down:
         // what it plays has to be what left, or it is answering a different
         // question from the one that was asked.
-        audioController.onAudio = { [weak self] buffer in
+        audioController.onAudio = { [weak self] bufferList, format in
             guard let self else { return }
-            self.ndiSender.send(audioBuffer: buffer)
-            self.audioMonitor.play(buffer.audioBufferList, format: buffer.format)
+            self.ndiSender.send(audio: bufferList, format: format)
+            self.audioMonitor.play(bufferList, format: format)
         }
 
         // In Receive, what the monitor plays when the audio goes into a
         // loopback: its input, as the call hears it. Not sent anywhere — it
         // came off the network already.
-        loopbackCapture.onAudio = { [weak self] buffer in
-            self?.audioMonitor.play(buffer.audioBufferList, format: buffer.format)
+        loopbackCapture.onAudio = { [weak self] bufferList, format in
+            self?.audioMonitor.play(bufferList, format: format)
         }
 
         // The other thing that can fill the same stream. Only one of the two
