@@ -11,6 +11,32 @@ deciding whether to take the update — not assembled from commit subjects.
 
 ## [Unreleased]
 
+## [2.9.0] - 2026-09-25
+
+### Added
+
+- **Hear the call's microphone from the other Mac.** In Receive, the monitor button now
+  plays `NDI Audio` itself, exactly what the call hears, instead of the stream as it came
+  off the network, which a fault in that driver never reached. `NDI Audio` shares its audio
+  between the apps reading it, so OpenBeam takes it for itself while you listen. The call
+  and anything else using it won't hear your microphone until you stop, and a warning says
+  so before it starts. macOS then moves the system's input to another microphone (on a
+  MacBook, its own), so OpenBeam mutes that one and puts everything back when you stop,
+  even if OpenBeam quits or crashes mid-monitor.
+
+  On a Mac nobody sits at, point the monitor at the output you're sending (**Monitoring on**
+  → that output) and it goes to the other Mac inside the stream, under the system audio.
+  With a loopback such as BlackHole under **Play audio on**, the monitor still listens to it
+  without taking anything from the call.
+
+### Changed
+
+- **Audio arrives sooner: a microphone about 125 ms, system audio about 50 ms.** The
+  microphone used to leave in 85 ms blocks, and the other Mac held what it received for a
+  fixed 80 ms to ride them out. The microphone now sends 10 ms blocks, and playback starts
+  with a 30 ms cushion that grows by itself, up to 80 ms, only on a link that keeps running
+  dry. **Statistics → Audio** shows the cushion in use.
+
 ## [2.8.2] - 2026-09-25
 
 ### Fixed
