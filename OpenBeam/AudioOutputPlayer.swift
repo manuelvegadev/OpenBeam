@@ -14,13 +14,9 @@ import os
 
 final class AudioOutputPlayer: @unchecked Sendable {
 
-    /// How much audio is held back before playback starts, and how far behind
-    /// the stream is allowed to fall before the extra is thrown away. The
-    /// network delivers in bursts and the output device consumes at a
-    /// perfectly even rate; the cushion is the difference between continuous
-    /// audio and a click on every jitter.
-    private static let targetLatency = 0.08
-    private static let maximumLatency = 0.24
+    /// The cushion the received stream is playing with right now, for the
+    /// statistics. Zero when nothing is playing.
+    var cushion: Double { ringLock.withLock { $0 }?.cushion ?? 0 }
 
     private let peakLock = OSAllocatedUnfairLock(initialState: Float(0))
     var currentPeak: Float { peakLock.withLock { $0 } }
@@ -157,11 +153,7 @@ final class AudioOutputPlayer: @unchecked Sendable {
         // interrupt.
         if wasRunning { health?.rebuilt() }
 
-        let ring = RingBuffer(channels: channels,
-                              capacity: Int(sampleRate * 1.0),
-                              target: Int(sampleRate * Self.targetLatency),
-                              maximum: Int(sampleRate * Self.maximumLatency),
-                              health: health)
+        let ring = RingBuffer(sampleRate: sampleRate, channels: channels, health: health)
 
         let source = AVAudioSourceNode(format: format) { silence, _, frameCount, audioBufferList in
             let filled = ring.read(into: UnsafeMutableAudioBufferListPointer(audioBufferList),
@@ -266,27 +258,67 @@ final class AudioOutputPlayer: @unchecked Sendable {
 /// than `maximum` behind, and goes quiet to fill the cushion again when it
 /// runs dry — because moving the read index is the one correction that costs
 /// nothing to get wrong twice.
-private final class RingBuffer: @unchecked Sendable {
+///
+/// The cushion itself is the reader's to size: it grows by half each time it
+/// runs dry on a stream that was still flowing, up to `ceiling`, and never
+/// shrinks while the ring lives. A link that jittered once will again.
+final class RingBuffer: @unchecked Sendable {
 
-    private let channels: Int
+    /// How much audio is held back before playback starts. The network
+    /// delivers in bursts and the output device consumes at a perfectly even
+    /// rate; the cushion is the difference between continuous audio and a
+    /// click on every jitter.
+    ///
+    /// It starts small and grows only when it proves too small. Both capture
+    /// paths send ~10 ms blocks, and over a Thunderbolt Bridge or a quiet LAN
+    /// 30 ms rides them out with room to spare — it was a fixed 80 ms while
+    /// the microphone sent 85 ms blocks, and every listener paid for that on
+    /// every link. A link that jitters more (Wi-Fi, an older sender still
+    /// sending big blocks) costs a few dropouts at the start, each of which
+    /// grows the cushion, up to the 80 ms that used to be the only size.
+    private static let initialLatency = 0.03
+    private static let ceilingLatency = 0.08
+
+    /// How soon the stream has to come back after running dry for the dropout
+    /// to count against the cushion. Jitter is a block or two late; a source
+    /// that stopped — a tapped output between sentences runs no I/O at all —
+    /// stays gone far longer, and growing on that would grow on every pause.
+    private static let jitterWindow = 0.25
+
+    let channels: Int
+    let sampleRate: Double
     private let capacity: Int
-    private let target: Int
-    private let maximum: Int
+    private let ceiling: Int
     private let storage: UnsafeMutablePointer<Float>
     private let health: AudioHealth?
 
+    /// Reader-owned. `maximum` follows `target` at three times it, the ratio
+    /// the fixed 80/240 ms pair had: room for a burst after a stall without
+    /// throwing it away.
+    private var target: Int
+    private var maximum: Int { target * 3 }
+    /// When the reader last ran dry, while it waits to know whether that was
+    /// jitter or the source stopping.
+    private var dryAt: UInt64?
+    /// The cushion in seconds, for the statistics.
+    var cushion: Double { Double(state.withLock { $0.target }) / sampleRate }
+
     /// Frame counters rather than offsets: the difference between them is how
     /// much audio is in the buffer, with no empty-or-full ambiguity to resolve.
-    private let state = OSAllocatedUnfairLock(initialState: (written: 0, read: 0))
+    /// `target` rides along as main may read it, published when it changes.
+    private let state: OSAllocatedUnfairLock<(written: Int, read: Int, target: Int)>
     /// Touched only by the reader, so it needs no protection.
     private var isPrimed = false
 
-    init(channels: Int, capacity: Int, target: Int, maximum: Int, health: AudioHealth?) {
+    /// A second of storage, and the cushion starting at `initialLatency`.
+    init(sampleRate: Double, channels: Int, health: AudioHealth?) {
         self.health = health
         self.channels = max(channels, 1)
-        self.target = target
-        self.maximum = maximum
-        self.capacity = max(capacity, maximum * 2)
+        self.sampleRate = sampleRate
+        target = Int(sampleRate * Self.initialLatency)
+        ceiling = max(Int(sampleRate * Self.ceilingLatency), target)
+        state = OSAllocatedUnfairLock(initialState: (written: 0, read: 0, target: target))
+        capacity = max(Int(sampleRate), ceiling * 3 * 2)
         storage = UnsafeMutablePointer<Float>.allocate(capacity: self.capacity * self.channels)
         storage.initialize(repeating: 0, count: self.capacity * self.channels)
     }
@@ -337,6 +369,18 @@ private final class RingBuffer: @unchecked Sendable {
         }
 
         if !isPrimed {
+            // The stream came back soon after running dry, so it was the
+            // cushion that was short, not the source that stopped: wait for a
+            // bigger one before playing again.
+            if let dryAt, available > 0 {
+                self.dryAt = nil
+                let elapsed = Double(DispatchTime.now().uptimeNanoseconds - dryAt) / 1_000_000_000
+                if elapsed < Self.jitterWindow, target < ceiling {
+                    target = min(ceiling, target * 3 / 2)
+                    let published = target
+                    state.withLock { $0.target = published }
+                }
+            }
             guard available >= target else {
                 silence(buffers, frames: frames, from: 0)
                 publish(read: read)
@@ -372,6 +416,7 @@ private final class RingBuffer: @unchecked Sendable {
         // expecting — which is the thing a listener hears.
         if count < frames {
             isPrimed = false
+            dryAt = DispatchTime.now().uptimeNanoseconds
             health?.ranDry()
         }
 

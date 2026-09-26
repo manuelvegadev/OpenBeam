@@ -1778,10 +1778,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 : report.networkGaps > 0
                 ? "Network: \(report.networkGaps) gaps, worst \(ms(report.worstGap))"
                 : (report.formatChanges > 0 ? "Network: \(report.formatChanges) format changes" : "Network: OK"),
+            // The cushion is the playback half of the latency, and it grows
+            // by itself on a link that needs it — so it is shown, rather than
+            // left to be discovered as a delay nobody can explain.
             !receiving ? "Playback: —"
                 : report.underruns + report.driftDrops + report.rebuilds > 0
-                ? "Playback: \(report.underruns) dry, \(report.driftDrops) drift, \(report.rebuilds) rebuilds"
-                : "Playback: OK",
+                ? "Playback: \(report.underruns) dry, \(report.driftDrops) drift, \(report.rebuilds) rebuilds, cushion \(ms(audioPlayer.cushion))"
+                : "Playback: OK, cushion \(ms(audioPlayer.cushion))",
         ]
         for (item, line) in zip(statsAudioItems, lines) where item.title != line {
             item.title = line

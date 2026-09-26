@@ -97,11 +97,17 @@ raw, with no echo canceller of its own.
 
 ## Latency and drift
 
-The received stream is held for 80 ms before it starts playing. The two machines' clocks
-are independent — the sending card decides how much audio arrives, the receiving one how
-fast it leaves — so the buffer drifts in one direction or the other however good the
-network is. It throws the excess away if it falls more than 240 ms behind, and goes quiet
-to refill if it runs dry.
+Both capture paths send audio in blocks of about 10 ms. The received stream is held for
+30 ms before it starts playing, which rides out a Thunderbolt Bridge or a quiet LAN with
+room to spare. When a link jitters more than that, the first few dropouts each grow the
+cushion by half, up to 80 ms, and it stays there for the rest of the stream. A pause in
+the source (a tapped output sends nothing between sentences) does not count. **Statistics
+→ Audio** shows the cushion in use.
+
+The two machines' clocks are independent — the sending card decides how much audio
+arrives, the receiving one how fast it leaves — so the buffer drifts in one direction or
+the other however good the network is. It throws the excess away if it falls more than
+three cushions behind, and goes quiet to refill if it runs dry.
 
 ## Requirements
 
