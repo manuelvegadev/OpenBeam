@@ -245,18 +245,27 @@ final class KeepAwake {
         onChange?()
     }
 
+    /// Waits on a semaphore rather than waitUntilExit(), which spins the
+    /// caller's run loop — on main, that ran timers and queued blocks inside
+    /// apply(), apply() among them. Bounded too: a sudo that hangs is a no.
     private static func run(_ path: String, _ arguments: [String]) -> Bool {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)
         process.arguments = arguments
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
         do {
             try process.run()
         } catch {
             return false
         }
-        process.waitUntilExit()
+        guard exited.wait(timeout: .now() + 5) == .success else {
+            awakeLog.error("\(path, privacy: .public) did not finish in 5 s")
+            process.terminate()
+            return false
+        }
         return process.terminationStatus == 0
     }
 
