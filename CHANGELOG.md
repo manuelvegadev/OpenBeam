@@ -11,6 +11,42 @@ deciding whether to take the update — not assembled from commit subjects.
 
 ## [Unreleased]
 
+## [2.10.0] - 2026-10-12
+
+### Added
+
+- **The pointer reaches the other Mac's second display.** Controlling a Mac that has two
+  displays side by side, with one of them full screen in the viewer, push the pointer past
+  the edge where the other one sits and it carries on there, as on that Mac itself: you
+  see it on the display in front of you, click, type and drag windows across. Bring it
+  back and it returns into the picture at the same height. Edges where this Mac has a
+  screen of its own still lead to it.
+- **⌃⌥⌘R gives the pointer back too.** It already returned the keyboard to this Mac; now
+  the pointer comes with it, wherever it was on the other Mac. Press it again with the
+  pointer on the picture, or click the picture, to take both back.
+
+### Changed
+
+- **Everything OpenBeam sends between your two Macs takes the Thunderbolt cable.** Remote
+  screen already did; now the clipboard, shared files and OpenBeam's own preview and audio
+  playback do too, so they keep working when the router or Wi-Fi drops. They move onto the
+  cable by themselves when it comes up, and off it to the network when it goes. Video
+  calls read the camera and microphone through NDI Tools, which still picks its own way.
+- **Remote screen moves to the cable when it comes up late.** A session that started over
+  Wi-Fi — the cable takes a while after boot — stayed there at half size and 60 fps; it now
+  reconnects over Thunderbolt as soon as the cable answers.
+
+### Fixed
+
+- **Audio keeps playing when a device changes.** A microphone or output that changed format
+  under OpenBeam (AirPods switching profile, a display's speakers going away on sleep)
+  could stop audio until a restart, or crash it. A source with more than two channels now
+  plays.
+- **Quitting and stopping no longer crash** while NDI is still sending or receiving.
+- **Remote screen and ClipSync are sturdier.** Fixes for crashes when a session ends at the
+  wrong moment, malformed values from the other Mac, file transfers with bad names, ⌘Q or
+  ⌘W meant for the other Mac quitting OpenBeam between sessions, and long computer names.
+
 ## [2.9.0] - 2026-09-25
 
 ### Added
@@ -417,7 +453,9 @@ captures a microphone raw, with no echo canceller of its own.
   as an NDI source on the local network, with a live preview, camera selection, macOS camera
   effects and statistics.
 
-[Unreleased]: https://github.com/manuelvegadev/OpenBeam/compare/v2.8.2...HEAD
+[Unreleased]: https://github.com/manuelvegadev/OpenBeam/compare/v2.10.0...HEAD
+[2.10.0]: https://github.com/manuelvegadev/OpenBeam/compare/v2.9.0...v2.10.0
+[2.9.0]: https://github.com/manuelvegadev/OpenBeam/compare/v2.8.2...v2.9.0
 [2.8.2]: https://github.com/manuelvegadev/OpenBeam/compare/v2.8.1...v2.8.2
 [2.8.1]: https://github.com/manuelvegadev/OpenBeam/compare/v2.8.0...v2.8.1
 [2.8.0]: https://github.com/manuelvegadev/OpenBeam/compare/v2.7.4...v2.8.0
