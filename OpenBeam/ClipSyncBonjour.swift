@@ -35,7 +35,13 @@ final class BonjourPublisher: @unchecked Sendable {
         TXTRecordCreate(&txtRef, 0, nil)
         defer { TXTRecordDeallocate(&txtRef) }
         for (k, v) in txt {
-            let bytes = Array(v.utf8)
+            // An entry is one length byte covering "key=value", so the value is
+            // cut, on a character boundary, to what fits. A computer name of 64
+            // characters can be well over 255 bytes, and UInt8(count) traps.
+            let room = max(255 - k.utf8.count - 1, 0)
+            var fitted = Substring(v)
+            while fitted.utf8.count > room { fitted = fitted.dropLast() }
+            let bytes = Array(fitted.utf8)
             _ = bytes.withUnsafeBufferPointer { buf -> DNSServiceErrorType in
                 TXTRecordSetValue(&txtRef, k, UInt8(buf.count), buf.baseAddress)
             }

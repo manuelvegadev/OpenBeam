@@ -22,6 +22,9 @@ enum ClipSync {
     static let maxShareTotalBytes = 100 * 1024 * 1024     // 100 MB
     static let maxChunkPlaintextBytes = 256 * 1024        // 256 KiB
     static let idleTimeoutSeconds: Double = 300
+    /// How long a connection may sit without a hello. Anything on the LAN can
+    /// open one, and each holds a decode buffer of up to a frame.
+    static let handshakeTimeoutSeconds: Double = 10
     static let pairDialogTimeoutSeconds: Double = 30
     static let maxDisplayNameLength = 64
 
@@ -182,9 +185,11 @@ enum ClipSyncJSON {
 
 enum ClipSyncFraming {
 
-    /// Wraps `body` with a 4-byte big-endian length prefix.
-    static func wrap(_ body: Data) -> Data {
-        precondition(body.count <= ClipSync.maxFrameBytes, "frame too large")
+    /// Wraps `body` with a 4-byte big-endian length prefix, or nil if it is
+    /// over the cap. Not a trap: what we send can echo what a peer sent (a
+    /// ping's nonce, a transfer ID), and re-encoding grows it past the cap.
+    static func wrap(_ body: Data) -> Data? {
+        guard body.count <= ClipSync.maxFrameBytes else { return nil }
         var len = UInt32(body.count).bigEndian
         var out = Data(capacity: 4 + body.count)
         withUnsafeBytes(of: &len) { out.append(contentsOf: $0) }
@@ -206,7 +211,7 @@ enum ClipSyncFraming {
         func nextFrame() throws -> Data? {
             guard buffer.count >= 4 else { return nil }
             let lengthBE: UInt32 = buffer.prefix(4).withUnsafeBytes { raw in
-                raw.load(as: UInt32.self)
+                raw.loadUnaligned(as: UInt32.self)
             }
             let length = Int(UInt32(bigEndian: lengthBE))
             if length > ClipSync.maxFrameBytes {
@@ -234,6 +239,7 @@ enum ClipSyncError: Error, CustomStringConvertible {
     case limitExceeded(String)
     case keychain(OSStatus)
     case invalidPeer
+    case handshakeTimeout
 
     var description: String {
         switch self {
@@ -248,6 +254,7 @@ enum ClipSyncError: Error, CustomStringConvertible {
         case .limitExceeded(let what): return "limit exceeded: \(what)"
         case .keychain(let s): return "keychain error: OSStatus \(s)"
         case .invalidPeer: return "invalid or unknown peer"
+        case .handshakeTimeout: return "no hello within the handshake timeout"
         }
     }
 }

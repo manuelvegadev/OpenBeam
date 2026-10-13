@@ -9,6 +9,7 @@
 //
 
 import AppKit
+import ImageIO
 import CryptoKit
 import Foundation
 import os
@@ -235,11 +236,16 @@ final class SharePlugin: @unchecked Sendable {
     private func handleBegin(_ data: Data) {
         guard let begin = try? ClipSyncJSON.decoder.decode(ShareBeginPayload.self, from: data) else { return }
         guard begin.originID != identity.peerID else { return }
+        // Both name a directory below, so both must be the UUIDs the protocol
+        // says they are: a "../" in either would write, and a later cancel
+        // delete, outside the cache. Not even answered — a cancel would echo
+        // the bad ID.
+        guard UUID(uuidString: begin.originID) != nil, UUID(uuidString: begin.transferID) != nil else { return }
         let wantsImage = begin.paste == "image"
         guard wantsImage ? preferences.syncsImages : preferences.syncsFiles else {
             sendCancel(transferID: begin.transferID, reason: "user"); return
         }
-        guard begin.files.count <= ClipSync.maxShareFileCount else {
+        guard !begin.files.isEmpty, begin.files.count <= ClipSync.maxShareFileCount else {
             sendCancel(transferID: begin.transferID, reason: "limit_exceeded"); return
         }
         guard begin.totalBytes <= preferences.maxTransferBytes else {
@@ -282,6 +288,14 @@ final class SharePlugin: @unchecked Sendable {
             // Sequential file ordering check.
             if chunk.fileIndex < inb.fileIndex {
                 return    // late chunk, ignore
+            }
+            // The index comes from the peer and indexes `files` below.
+            guard inb.files.indices.contains(chunk.fileIndex) else {
+                inb.fileHandle?.closeFile()
+                state.inflight.removeValue(forKey: chunk.transferID)
+                try? FileManager.default.removeItem(at: inb.directory)
+                self.sendCancel(transferID: chunk.transferID, reason: "other")
+                return
             }
             if chunk.fileIndex > inb.fileIndex {
                 // Close previous file (it should already be done) and open the next.
@@ -363,6 +377,21 @@ final class SharePlugin: @unchecked Sendable {
         }
     }
 
+    /// Past this a TIFF is not built: a small PNG can claim huge dimensions,
+    /// and its TIFF — 4 bytes a pixel, on main — would take the app down. The
+    /// PNG still goes on the clipboard.
+    private static let maxTIFFPixels = 100_000_000
+
+    /// Width × height from the image's header, without decoding it.
+    private static func pixelCount(ofImage data: Data) -> Int {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = props[kCGImagePropertyPixelWidth] as? Int,
+              let height = props[kCGImagePropertyPixelHeight] as? Int
+        else { return .max }
+        return width.multipliedReportingOverflow(by: height).overflow ? .max : width * height
+    }
+
     /// Put a received picture on the clipboard and drop the file it arrived in:
     /// this is clipboard content, not a download, so nothing should be left in
     /// the cache for a week.
@@ -382,7 +411,8 @@ final class SharePlugin: @unchecked Sendable {
             item.setData(png, forType: .png)
             // A TIFF beside it, because plenty of apps ask for that and nothing
             // else. Built here rather than sent, so the wire stays compressed.
-            if let rep = NSBitmapImageRep(data: png),
+            if Self.pixelCount(ofImage: png) <= Self.maxTIFFPixels,
+               let rep = NSBitmapImageRep(data: png),
                let tiff = rep.representation(using: .tiff, properties: [:]) {
                 item.setData(tiff, forType: .tiff)
             }

@@ -10,6 +10,7 @@
 
 import Foundation
 import CryptoKit
+import SystemConfiguration
 import os
 
 // MARK: - Public records
@@ -80,7 +81,9 @@ final class ClipSyncIdentity: @unchecked Sendable {
     }
 
     var displayName: String {
-        let raw = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
+        // Read on every hello and every advertisement, on the I/O queues:
+        // Host.current() can wait seconds on name lookups, this does not.
+        let raw = SCDynamicStoreCopyComputerName(nil, nil) as String? ?? ProcessInfo.processInfo.hostName
         let trimmed = raw.replacingOccurrences(of: ".local", with: "")
         return String(trimmed.prefix(ClipSync.maxDisplayNameLength))
     }

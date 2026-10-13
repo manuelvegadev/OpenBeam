@@ -126,6 +126,11 @@ final class ClipSyncManager: NSObject, @unchecked Sendable {
             let b = Array(s.pairing.values)
             s.sessions.removeAll()
             s.pairing.removeAll()
+            // Cancelling reports each close, and a dial with payloads waiting
+            // would be retried: nothing is waiting any more.
+            s.dialing.removeAll()
+            s.outbox.removeAll()
+            s.dialFailures.removeAll()
             return (a, b)
         }
         for c in sessions { c.cancel() }
@@ -428,8 +433,8 @@ extension ClipSyncManager: ClipSyncConnectionDelegate {
             ioQueue.asyncAfter(deadline: .now() + 1) { [weak self] in self?.openSessionIfNeeded(for: peer) }
         }
         // A pair that ended without an answer: say so rather than leave the
-        // panel spinning. Accept and reject already resolved their own panel,
-        // and the token check drops this one.
+        // panel spinning. Accept, reject and timeout resolved their panel
+        // first, and a panel keeps the first outcome it is given.
         resolvePanel(for: c, outcome: .failed)
     }
 

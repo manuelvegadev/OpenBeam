@@ -15,7 +15,7 @@ import os
 
 private let connLog = Logger(subsystem: "com.openbeam.clipsync", category: "connection")
 
-private extension Data {
+extension Data {
     var hex: String { map { String(format: "%02x", $0) }.joined() }
 }
 
@@ -68,6 +68,12 @@ final class ClipSyncConnection: @unchecked Sendable {
     private let decoder = ClipSyncFraming.Decoder()
 
     private let lock = OSAllocatedUnfairLock(initialState: State())
+    /// Held from taking a nonce counter to handing the frame to the transport.
+    /// Sends come from main, the manager's queue and this connection's, and two
+    /// that passed each other went out in reverse counter order — which the
+    /// peer rejects as a replay, dropping the session. Recursive because a
+    /// failed send closes, and the delegate may send from inside that.
+    private let sendOrder = NSRecursiveLock()
     private struct State {
         var handshake: HandshakeState = .awaitingPeerHello
         var ephPriv: Curve25519.KeyAgreement.PrivateKey?
@@ -99,11 +105,17 @@ final class ClipSyncConnection: @unchecked Sendable {
             self?.handle(state: state)
         }
         connection.start(queue: queue)
+        queue.asyncAfter(deadline: .now() + ClipSync.handshakeTimeoutSeconds) { [weak self] in
+            guard let self, self.lock.withLock({ $0.handshake == .awaitingPeerHello }) else { return }
+            self.close(with: ClipSyncError.handshakeTimeout)
+        }
     }
 
+    /// Through close(), so the delegate hears of it: a connection cancelled
+    /// without a word stayed in the manager's pairing and dialing tables, and a
+    /// peer left in `dialing` was never dialled again.
     func cancel() {
-        lock.withLock { $0.handshake = .closed }
-        connection.cancel()
+        close(with: nil)
     }
 
     private func handle(state: NWConnection.State) {
@@ -178,7 +190,13 @@ final class ClipSyncConnection: @unchecked Sendable {
     func send(codable: some Encodable, then: (() -> Void)? = nil) {
         do {
             let body = try ClipSyncJSON.encoder.encode(codable)
-            let framed = ClipSyncFraming.wrap(body)
+            guard let framed = ClipSyncFraming.wrap(body) else {
+                // Closed, not skipped: an encrypted payload has already used
+                // its nonce, and the peer would reject the next as a replay.
+                connLog.error("outbound frame of \(body.count, privacy: .public) bytes is over the frame cap")
+                close(with: ClipSyncError.frameTooLarge(body.count))
+                return
+            }
             connection.send(content: framed, completion: .contentProcessed { [weak self] err in
                 if let err {
                     self?.close(with: err)
@@ -195,6 +213,8 @@ final class ClipSyncConnection: @unchecked Sendable {
     /// `paired` state.
     @discardableResult
     func sendEncrypted(payload: Data) -> Bool {
+        sendOrder.lock()
+        defer { sendOrder.unlock() }
         let (key, n, dirByte): (SymmetricKey?, UInt64, UInt8) = lock.withLock { s in
             guard s.handshake == .paired, let key = s.sessionKey else {
                 return (nil, 0, 0)

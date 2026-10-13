@@ -55,8 +55,12 @@ final class ClipSyncDiscovery: @unchecked Sendable {
             return l
         }
         l?.cancel()
-        publisher.stop()
-        browser.stop()
+        // On the queue they were started on and whose callbacks mutate their
+        // resolve tables; stopped from here, the two raced.
+        queue.async { [publisher, browser] in
+            publisher.stop()
+            browser.stop()
+        }
         onPeersChanged?([])
     }
 

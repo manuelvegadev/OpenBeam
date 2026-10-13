@@ -111,6 +111,9 @@ final class PairingPanel: NSObject, NSWindowDelegate {
     private var timeout: Timer?
     private var answered = false
     private var closed = false
+    /// The first outcome is the one shown: a reject or a timeout is followed
+    /// by the connection closing, which reports a drop of its own.
+    private var resolved = false
 
     init(token: ObjectIdentifier,
          kind: Kind,
@@ -275,6 +278,8 @@ final class PairingPanel: NSObject, NSWindowDelegate {
     /// or a dropped connection is something the user reads, not something they
     /// have to infer from a peer that never appears under Paired.
     func finish(outcome: ClipSyncPairing.Outcome) {
+        guard !resolved else { return }
+        resolved = true
         // Nothing left to decide once the pairing is over, however it ended.
         answered = true
         spinner.stopAnimation(nil)
