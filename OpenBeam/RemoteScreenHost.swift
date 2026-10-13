@@ -154,7 +154,7 @@ final class RemoteScreenHost: @unchecked Sendable {
         }
 
         let mode = CGDisplayCopyDisplayMode(displayID)
-        let name = Self.name(of: displayID)
+        let name = Self.screenNames()[displayID] ?? "Display"
         self.endpoints = endpoints
         hostLog.info("offering session on port \(port, privacy: .public), \(captureSize.width, privacy: .public)×\(captureSize.height, privacy: .public), endpoints \(endpoints.map { "\($0.link) \($0.address)" }.joined(separator: ", "), privacy: .public)")
         return ScreenOfferPayload(requestID: request.requestID,
@@ -202,6 +202,9 @@ final class RemoteScreenHost: @unchecked Sendable {
             guard preamble[4] == RemoteScreen.version else {
                 throw RemoteScreenError.protocolViolation("unsupported version \(preamble[4])")
             }
+            cond.lock()
+            let keys = self.keys  // end() clears it under this lock
+            cond.unlock()
             guard let channel = RemoteScreen.Channel(rawValue: preamble[5]), let keys else {
                 throw RemoteScreenError.protocolViolation("unknown channel \(preamble[5])")
             }
@@ -235,8 +238,21 @@ final class RemoteScreenHost: @unchecked Sendable {
 
     private func startStreaming() {
         cond.lock()
+        // end() may have run since BIND marked the session started. It has
+        // shut both sockets already; nothing is left but to close them.
+        guard !ended else {
+            close(videoFD)
+            close(inputFD)
+            cond.unlock()
+            return
+        }
         lastActivityNs = monotonicNs()
         let fd = videoFD
+        // Registered under the lock end() sets `ended` under, so its removal
+        // always comes after: a display callback left registered would call
+        // into this host after it is freed.
+        startWatchdog()
+        CGDisplayRegisterReconfigurationCallback(Self.displaysReconfigured, Unmanaged.passUnretained(self).toOpaque())
         cond.unlock()
         // Raw pixels are for Thunderbolt. A viewer that reached us some other way
         // (the cable came out, and it reconnected over Ethernet or Wi-Fi) gets
@@ -258,8 +274,6 @@ final class RemoteScreenHost: @unchecked Sendable {
         let reader = Thread { self.inputLoop() }
         reader.qualityOfService = .userInteractive
         reader.start()
-        startWatchdog()
-        CGDisplayRegisterReconfigurationCallback(Self.displaysReconfigured, Unmanaged.passUnretained(self).toOpaque())
         controlQueue.async {
             self.watchingDisplays = true
             if link != "thunderbolt", let request = self.request {
@@ -375,18 +389,26 @@ final class RemoteScreenHost: @unchecked Sendable {
         var ids = [CGDirectDisplayID](repeating: 0, count: 16)
         var count: UInt32 = 0
         guard CGGetActiveDisplayList(16, &ids, &count) == .success else { return [] }
+        let names = screenNames()
         return ids.prefix(Int(count)).compactMap { id in
             guard CGDisplayMirrorsDisplay(id) == kCGNullDirectDisplay else { return nil }
             let bounds = CGDisplayBounds(id)
             let pixels = RemoteScreenCapture.pixelSize(of: id)
-            return ScreenDisplayInfo(id: id, name: name(of: id), width: pixels.width, height: pixels.height,
+            return ScreenDisplayInfo(id: id, name: names[id] ?? "Display", width: pixels.width, height: pixels.height,
                                      x: bounds.minX, y: bounds.minY, pointWidth: bounds.width, pointHeight: bounds.height,
                                      refreshHz: CGDisplayCopyDisplayMode(id)?.refreshRate ?? 0, main: CGDisplayIsMain(id) != 0)
         }
     }
 
-    private static func name(of id: CGDirectDisplayID) -> String {
-        NSScreen.screens.first { $0.displayID == id }?.localizedName ?? "Display"
+    /// Read on main, in one hop: this runs on controlQueue right after displays
+    /// change, while AppKit rebuilds its screen list on main. Nothing waits on
+    /// controlQueue from main, so the hop cannot deadlock.
+    private static func screenNames() -> [CGDirectDisplayID: String] {
+        let read = {
+            Dictionary(NSScreen.screens.compactMap { s in s.displayID.map { ($0, s.localizedName) } },
+                       uniquingKeysWith: { first, _ in first })
+        }
+        return Thread.isMainThread ? read() : DispatchQueue.main.sync(execute: read)
     }
 
     private var isEnded: Bool {
@@ -460,7 +482,9 @@ final class RemoteScreenHost: @unchecked Sendable {
     private func sendLoop() {
         cond.lock()
         let fd = videoFD
+        let keys = self.keys
         cond.unlock()
+        defer { close(fd) }  // end() only shuts it down: closing is this thread's job
         guard let keys else { return }
         let sender = RecordSender(fd: fd, key: keys.videoH2V)
         var plaintext = UnsafeMutableRawPointer.allocate(byteCount: 1, alignment: 64)
@@ -468,10 +492,7 @@ final class RemoteScreenHost: @unchecked Sendable {
         var frameIndex: UInt64 = 0
         var lastSize = (width: 0, height: 0)
         var lastSendNs: UInt64 = 0
-        defer {
-            plaintext.deallocate()
-            close(fd)
-        }
+        defer { plaintext.deallocate() }
 
         while true {
             cond.lock()
@@ -480,8 +501,11 @@ final class RemoteScreenHost: @unchecked Sendable {
                 cond.unlock()
                 return
             }
-            if minFrameIntervalNs > 0, monotonicNs() < lastSendNs + minFrameIntervalNs {
-                let wait = Double(lastSendNs + minFrameIntervalNs - monotonicNs()) / 1e9
+            // One clock read: with two, the deadline can pass between them and
+            // `deadline - now` on UInt64 traps.
+            let now = monotonicNs(), deadline = lastSendNs + minFrameIntervalNs
+            if minFrameIntervalNs > 0, now < deadline {
+                let wait = Double(deadline - now) / 1e9
                 _ = cond.wait(until: Date(timeIntervalSinceNow: wait))
                 cond.unlock()
                 continue
@@ -496,7 +520,15 @@ final class RemoteScreenHost: @unchecked Sendable {
             CVPixelBufferLockBaseAddress(pb, .readOnly)
             let width = CVPixelBufferGetWidth(pb), height = CVPixelBufferGetHeight(pb)
             let bytesPerRow = CVPixelBufferGetBytesPerRow(pb)
-            let base = CVPixelBufferGetBaseAddress(pb)!
+            guard let base = CVPixelBufferGetBaseAddress(pb) else {
+                CVPixelBufferUnlockBaseAddress(pb, .readOnly)
+                if whole {
+                    cond.lock()
+                    needWhole = true  // owed to the viewer still
+                    cond.unlock()
+                }
+                continue
+            }
             if (width, height) != lastSize {
                 whole = true
                 lastSize = (width, height)
@@ -563,10 +595,11 @@ final class RemoteScreenHost: @unchecked Sendable {
         cond.lock()
         let fd = inputFD
         let receiver = inputReceiver
+        let keys = self.keys
         cond.unlock()
+        defer { close(fd) }  // end() only shuts it down: closing is this thread's job
         guard let keys, let receiver else { return }
         let sender = RecordSender(fd: fd, key: keys.inputH2V)
-        defer { close(fd) }
         do {
             while true {
                 let typeByte = try receiver.read(1)[0]
@@ -661,6 +694,7 @@ final class RemoteScreenHost: @unchecked Sendable {
             }
         }
         pending = nil
+        keys = nil
         cond.broadcast()
         cond.unlock()
 
@@ -676,9 +710,8 @@ final class RemoteScreenHost: @unchecked Sendable {
         }
         capture.onFrame = nil
         capture.onStop = nil
-        capture.stop()
+        capture.close()
         if wasStarted { inputSink?.releaseAll() }
-        keys = nil
         hostLog.info("session ended: \(reason.rawValue, privacy: .public)")
         onEnded?(reason)
     }

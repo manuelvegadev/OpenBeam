@@ -23,19 +23,39 @@ final class RemoteScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate, @un
     }
 
     /// On the capture queue, once per new image.
-    var onFrame: ((Frame) -> Void)?
+    var onFrame: ((Frame) -> Void)? {
+        get { lock.withLock { _onFrame } }
+        set { lock.withLock { _onFrame = newValue } }
+    }
     /// When the stream ends by itself, for example because the display went away.
-    var onStop: (() -> Void)?
+    var onStop: (() -> Void)? {
+        get { lock.withLock { _onStop } }
+        set { lock.withLock { _onStop = newValue } }
+    }
 
     private let queue = DispatchQueue(label: "com.openbeam.remotescreen.capture", qos: .userInteractive)
+
+    // Behind `lock`: the session ends from its own threads while ScreenCaptureKit
+    // reads the callbacks on the capture queue and reports a stop on its own,
+    // and a closure or an SCStream swapped mid-read can be released twice.
+    private let lock = NSLock()
     private var stream: SCStream?
+    private var _onFrame: ((Frame) -> Void)?
+    private var _onStop: (() -> Void)?
+    /// Bumped by stop(), so a start() still awaiting ScreenCaptureKit knows
+    /// its stream is no longer wanted rather than leaving it running.
+    private var generation = 0
+    /// Set by close(): no stream is installed after it, whenever start() began.
+    private var closed = false
 
     /// The largest size inside `maxWidth` × `maxHeight` with the display's aspect
     /// ratio, never above the display's own pixels, both sides even.
     static func fittedSize(display: CGDirectDisplayID, maxWidth: Int, maxHeight: Int) -> (width: Int, height: Int) {
         let pixels = pixelSize(of: display)
-        let pixelWidth = Double(pixels.width), pixelHeight = Double(pixels.height)
-        let limitW = Double(min(maxWidth, RemoteScreen.maxDimension)), limitH = Double(min(maxHeight, RemoteScreen.maxDimension))
+        // At least 1 on every side: a display going offline reads 0×0, the
+        // limits come from the viewer, and 0/0 is a NaN that Int() traps on.
+        let pixelWidth = Double(max(pixels.width, 1)), pixelHeight = Double(max(pixels.height, 1))
+        let limitW = Double(min(max(maxWidth, 1), RemoteScreen.maxDimension)), limitH = Double(min(max(maxHeight, 1), RemoteScreen.maxDimension))
         let scale = min(limitW / pixelWidth, limitH / pixelHeight, 1)
         func even(_ v: Double) -> Int { max(2, Int(v) & ~1) }
         return (even(pixelWidth * scale), even(pixelHeight * scale))
@@ -49,6 +69,7 @@ final class RemoteScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate, @un
     }
 
     func start(display displayID: CGDirectDisplayID, width: Int, height: Int) async throws {
+        let wanted = lock.withLock { generation }
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         guard let display = content.displays.first(where: { $0.displayID == displayID }) else {
             throw RemoteScreenError.protocolViolation("display \(displayID) is not available to capture")
@@ -66,14 +87,33 @@ final class RemoteScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate, @un
         let stream = SCStream(filter: SCContentFilter(display: display, excludingWindows: []), configuration: config, delegate: self)
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
         try await stream.startCapture()
-        self.stream = stream
+        let current = lock.withLock { () -> Bool in
+            guard !closed, generation == wanted else { return false }
+            self.stream = stream
+            return true
+        }
+        guard current else {
+            try? await stream.stopCapture()
+            return
+        }
         let mode = CGDisplayCopyDisplayMode(displayID)
         captureLog.info("capturing display \(displayID, privacy: .public) (\(mode?.pixelWidth ?? 0, privacy: .public)×\(mode?.pixelHeight ?? 0, privacy: .public) px @ \(mode?.refreshRate ?? 0, privacy: .public) Hz) at \(width, privacy: .public)×\(height, privacy: .public)")
     }
 
+    /// Stops for good: the session is over. Unlike stop(), which a restart
+    /// follows, it also turns away a start() that read its generation after it.
+    func close() {
+        lock.withLock { closed = true }
+        stop()
+    }
+
     func stop() {
-        guard let stream else { return }
-        self.stream = nil
+        let stopped = lock.withLock { () -> SCStream? in
+            generation += 1
+            defer { stream = nil }
+            return stream
+        }
+        guard let stream = stopped else { return }
         stream.stopCapture { error in
             if let error { captureLog.error("stop: \(error.localizedDescription, privacy: .public)") }
         }
@@ -93,8 +133,12 @@ final class RemoteScreenCapture: NSObject, SCStreamOutput, SCStreamDelegate, @un
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
         captureLog.error("stream stopped: \(error.localizedDescription, privacy: .public)")
-        self.stream = nil
-        onStop?()
+        let wasCurrent = lock.withLock { () -> Bool in
+            guard self.stream === stream else { return false }
+            self.stream = nil
+            return true
+        }
+        if wasCurrent { onStop?() }
     }
 
     private static let timebase: mach_timebase_info_data_t = {

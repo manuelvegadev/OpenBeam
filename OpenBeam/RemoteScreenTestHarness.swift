@@ -9,6 +9,9 @@
 //    -RemoteScreenFullscreen              (viewer) opens straight into fullscreen
 //    -RemoteScreenSyntheticMouse          (viewer) circles the host's pointer at 120 Hz,
 //                                         to measure input→photon without a hand on the mouse
+//    -RemoteScreenTestReconnect           (viewer) when a session ends, waits for the host's
+//                                         next offer and attaches it to the same window, as
+//                                         the plugin does — which frees the old session's view
 //
 
 #if DEBUG
@@ -66,6 +69,35 @@ enum RemoteScreenTestHarness {
         }
     }
 
+    /// Logs the session's states and, given an offer path, reconnects when it ends.
+    private static func observe(_ session: RemoteScreenViewer, reconnectFrom offerPath: String?, device: MTLDevice) {
+        let sessionID = session.offer.sessionID
+        session.onStateChange = { state in
+            harnessLog.info("viewer: \(String(describing: state), privacy: .public)")
+            if case .ended = state, let offerPath { reconnect(offerPath: offerPath, after: sessionID, device: device) }
+        }
+    }
+
+    /// Polls for an offer with a new session ID, then attaches it to the window.
+    private static func reconnect(offerPath: String, after previous: Data, device: MTLDevice) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            guard let data = try? Data(contentsOf: URL(fileURLWithPath: offerPath)),
+                  let offer = try? ClipSyncJSON.decoder.decode(ScreenOfferPayload.self, from: data),
+                  offer.sessionID != previous,
+                  let session = RemoteScreenViewer(offer: offer, device: device),
+                  let window = viewerWindow
+            else { return reconnect(offerPath: offerPath, after: previous, device: device) }
+            guard window.attach(session) else {
+                harnessLog.error("reconnect: could not attach")
+                return
+            }
+            observe(session, reconnectFrom: offerPath, device: device)
+            viewer = session
+            harnessLog.info("reconnect: attached session \(offer.sessionID.hex, privacy: .public)")
+            session.start()
+        }
+    }
+
     private static func runViewerIfRequested() -> Bool {
         let args = CommandLine.arguments
         guard let i = args.firstIndex(of: "-RemoteScreenTestViewer"), i + 1 < args.count else { return false }
@@ -85,7 +117,7 @@ enum RemoteScreenTestHarness {
                 harnessLog.error("could not set up a viewer")
                 return true
             }
-            session.onStateChange = { state in harnessLog.info("viewer: \(String(describing: state), privacy: .public)") }
+            observe(session, reconnectFrom: args.contains("-RemoteScreenTestReconnect") ? args[i + 1] : nil, device: device)
             NSApp.setActivationPolicy(.regular)
             window.showWindow(nil)
             NSApp.activate(ignoringOtherApps: true)

@@ -145,7 +145,7 @@ final class RemoteScreenDisplayPicker: NSView {
             .font: NSFont.systemFont(ofSize: min(13, max(9, rect.height / 7)), weight: .semibold),
             .foregroundColor: NSColor.white,
         ])
-        let detail = NSAttributedString(string: "\(Int(display.pointWidth)) × \(Int(display.pointHeight))", attributes: [
+        let detail = NSAttributedString(string: String(format: "%.0f × %.0f", display.pointWidth, display.pointHeight), attributes: [
             .font: NSFont.systemFont(ofSize: min(11, max(8, rect.height / 9))),
             .foregroundColor: NSColor(white: 1, alpha: 0.7),
         ])

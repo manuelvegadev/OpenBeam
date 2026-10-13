@@ -476,12 +476,18 @@ final class RemoteScreenPlugin: @unchecked Sendable {
         }
     }
 
+    /// Run from the run loop rather than from the caller, which is often a
+    /// main-queue block: a modal inside one holds the main queue shut until it
+    /// is dismissed, and SIGTERM, ClipSync and the host's display lookups all
+    /// wait on it.
     private func alert(_ title: String, _ message: String) {
-        let alert = NSAlert()
-        alert.messageText = title
-        alert.informativeText = message
-        NSApp.activate(ignoringOtherApps: true)
-        alert.runModal()
+        RunLoop.main.perform {
+            let alert = NSAlert()
+            alert.messageText = title
+            alert.informativeText = message
+            NSApp.activate(ignoringOtherApps: true)
+            alert.runModal()
+        }
     }
 }
 

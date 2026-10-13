@@ -178,7 +178,8 @@ final class InputInjector: RemoteInputSink, @unchecked Sendable {
     /// posted and the rest carried over, so slow scrolls still move.
     private func scroll(_ e: InputEventMessage) {
         let precise = e.button == 1
-        var dx = e.x, dy = e.y
+        // Finite, as decoded, but Int32() of anything past ±2^31 traps.
+        var dx = min(max(e.x, -100_000), 100_000), dy = min(max(e.y, -100_000), 100_000)
         if precise {
             dx += scrollRemainder.x
             dy += scrollRemainder.y

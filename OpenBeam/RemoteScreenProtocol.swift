@@ -311,6 +311,8 @@ struct InputEventMessage {
         flags = r.u64()
         x = r.f64()
         y = r.f64()
+        // Raw doubles off the wire: a NaN or an infinity is no position.
+        guard x.isFinite, y.isFinite else { return nil }
         seq = r.u64()
         sentViewerNs = r.u64()
     }

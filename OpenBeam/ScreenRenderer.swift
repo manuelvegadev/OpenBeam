@@ -69,12 +69,16 @@ final class ScreenCanvas: @unchecked Sendable {
     // blit that read it has finished.
     private var staging: [MTLBuffer?] = Array(repeating: nil, count: 4)
     private var nextStaging = 0
-    private let stagingFree = DispatchSemaphore(value: 4)
+    // Created at 0 and signalled up to 4 in init: libdispatch traps when a
+    // semaphore is freed below its initial value, and a session cut mid-frame
+    // never returns the buffer it was filling.
+    private let stagingFree = DispatchSemaphore(value: 0)
 
     init?(device: MTLDevice) {
         guard let queue = device.makeCommandQueue() else { return nil }
         self.device = device
         commandQueue = queue
+        for _ in staging { stagingFree.signal() }
     }
 
     /// A shared buffer of at least `length` bytes, waiting while all are in flight.
@@ -248,7 +252,15 @@ final class ScreenView: NSView {
     /// ⌘-shortcuts reach here before keyDown, and the menu would take them;
     /// while this view has focus they belong to the host.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        guard let input, event.type == .keyDown, window?.firstResponder === self else { return false }
+        guard event.type == .keyDown, window?.firstResponder === self else { return false }
+        guard let input else {
+            // Between sessions, while reconnecting, there is no host to send
+            // them to — but a ⌘Q or ⌘W meant for the other Mac must not quit
+            // OpenBeam or close this window. The menu and the close button
+            // still do both.
+            let command = event.modifierFlags.intersection([.command, .shift, .option, .control]) == .command  // Caps Lock aside
+            return command && ["q", "w"].contains(event.charactersIgnoringModifiers?.lowercased())
+        }
         input.key(event, in: window)
         return true
     }

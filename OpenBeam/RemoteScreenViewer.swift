@@ -294,7 +294,10 @@ final class RemoteScreenViewer: @unchecked Sendable {
 
         let reader = Thread {
             let receiver = RecordReceiver(fd: fd, key: self.keys.inputH2V)
-            defer { close(fd) }
+            // Closed on inputQueue, the only place it is written from, once the
+            // sender is gone: closed here, a queued event could still be
+            // written to the number after the system gave it to another socket.
+            defer { self.inputQueue.async { self.inputSender = nil; close(fd) } }
             do {
                 while true {
                     let bytes = try receiver.read(24)
@@ -305,6 +308,9 @@ final class RemoteScreenViewer: @unchecked Sendable {
                     }
                     r.skip(7)
                     let sent = r.u64(), host = r.u64()
+                    // Echoed by the host, so not trusted to be in the past or
+                    // to fit an Int64: either would trap below.
+                    guard sent <= received, host <= UInt64(Int64.max) else { continue }
                     let rtt = received - sent
                     self.lock.lock()
                     self.lastPongNs = received
@@ -505,10 +511,14 @@ final class RemoteScreenStats: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         current.shown += 1
-        current.queue.append(Double(Int64(info.sendHostNs) - Int64(info.captureHostNs)) / 1e6)
-        current.transfer.append(Double(Int64(info.receivedNs) - (Int64(info.sendHostNs) - offset)) / 1e6)
-        current.display.append(Double(present - Int64(info.receivedNs)) / 1e6)
-        current.total.append(Double(present - (Int64(info.captureHostNs) - offset)) / 1e6)
+        // In Double: the host's stamps come off the wire, and Int64() of one
+        // past Int64.max, or an Int64 subtraction that overflows, traps.
+        let captured = Double(info.captureHostNs), sentAt = Double(info.sendHostNs), received = Double(info.receivedNs)
+        let shown = Double(present), clockOffset = Double(offset)
+        current.queue.append((sentAt - captured) / 1e6)
+        current.transfer.append((received - (sentAt - clockOffset)) / 1e6)
+        current.display.append((shown - received) / 1e6)
+        current.total.append((shown - (captured - clockOffset)) / 1e6)
         if lastPresent > 0, refreshInterval > 0 {
             let refreshes = Int((Double(present - lastPresent) / 1e9 / refreshInterval).rounded())
             current.held[min(2, max(0, refreshes - 1))] += 1
