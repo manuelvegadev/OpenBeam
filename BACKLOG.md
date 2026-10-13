@@ -166,6 +166,11 @@ so an older peer keeps getting raw pixels, and a VTDecompressionSession on the
 viewer feeding the same Metal canvas. Expect a few milliseconds of encode and
 decode and some softening of fine text — the trade Thunderbolt makes unnecessary.
 
+[SCREEN-WIFI.md](SCREEN-WIFI.md) has the full proposal and the Wi-Fi measured on
+2026-09-28. About 200 Mbit/s went through without loss, but one ping in ten came
+back 25–50 ms late, so that latency tail has to be dealt with before any codec.
+It also covers why PyroWave was considered and set aside.
+
 ## Unverified
 
 The preview intro animation has not been looked at since the cleanup pass that
