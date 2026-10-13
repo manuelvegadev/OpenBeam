@@ -54,10 +54,68 @@ final class NDIReceiveSession: @unchecked Sendable {
 
         queue.async { [weak self] in
             guard let self else { return }
+            let running = { self.state.withLock { $0.running && $0.generation == generation } }
+            let make = { (url: String?) in Self.makeReceiver(source: source, url: url, configure: configure) }
 
-            let created: NDIlib_recv_instance_t? = source.withCString { namePtr in
+            guard var receiver = make(nil) else {
+                print("[OpenBeam] NDIlib_recv_create_v3 failed for \(source) (\(self.name))")
+                self.state.withLock { if $0.generation == generation { $0.running = false } }
+                NDIRuntime.release()
+                return
+            }
+            print("[OpenBeam] \(self.name) started — source: \(source)")
+
+            // By name at once, wherever libndi goes; over the Thunderbolt cable
+            // as soon as a route to the source's Mac turns up. The route is
+            // looked up elsewhere — it can wait on mDNS and discovery for
+            // seconds, and this queue is taking frames off the stream.
+            var pinned: String?
+            let found = OSAllocatedUnfairLock<String?>(initialState: nil)
+            var connectedAt = Date(), checkedAt = Date(), lookedUpAt = Date.distantPast
+            while running() {
+                capture(receiver)
+                guard -checkedAt.timeIntervalSinceNow >= 1 else { continue }
+                checkedAt = Date()
+                if NDIlib_recv_get_no_connections(receiver) > 0 { connectedAt = checkedAt }
+
+                if pinned != nil {
+                    // Pinned to the cable, a receiver does not fall back by itself
+                    // when the cable goes or the other Mac's address changes.
+                    guard -connectedAt.timeIntervalSinceNow >= 3, let byName = make(nil) else { continue }
+                    print("[OpenBeam] \(self.name) lost \(source) over Thunderbolt — back to finding it by name")
+                    NDIlib_recv_destroy(receiver)
+                    (receiver, pinned, connectedAt) = (byName, nil, Date())
+                } else if let url = found.withLock({ url in defer { url = nil }; return url }) {
+                    guard let overCable = make(url) else { continue }
+                    if Self.connect(overCable, whileCapturing: receiver, capture, until: running) {
+                        print("[OpenBeam] \(self.name) on \(source) over Thunderbolt at \(url)")
+                        NDIlib_recv_destroy(receiver)
+                        (receiver, pinned, connectedAt) = (overCable, url, Date())
+                    } else {
+                        NDIlib_recv_destroy(overCable)
+                    }
+                } else if -lookedUpAt.timeIntervalSinceNow >= 10 {
+                    lookedUpAt = checkedAt
+                    DispatchQueue.global(qos: .utility).async {
+                        guard running(), let url = NDIRoute.thunderboltURL(for: source) else { return }
+                        found.withLock { $0 = url }
+                    }
+                }
+            }
+
+            NDIlib_recv_destroy(receiver)
+            NDIRuntime.release()
+            print("[OpenBeam] \(self.name) stopped")
+        }
+    }
+
+    private static func makeReceiver(source: String, url: String?,
+                                     configure: (inout NDIlib_recv_create_v3_t) -> Void) -> NDIlib_recv_instance_t? {
+        source.withCString { namePtr in
+            (url ?? "").withCString { urlPtr in
                 var ndiSource = NDIlib_source_t()
                 ndiSource.p_ndi_name = namePtr
+                if url != nil { ndiSource.p_url_address = urlPtr }
 
                 var settings = NDIlib_recv_create_v3_t()
                 settings.source_to_connect_to = ndiSource
@@ -66,23 +124,29 @@ final class NDIReceiveSession: @unchecked Sendable {
                 configure(&settings)
                 return NDIlib_recv_create_v3(&settings)
             }
-
-            guard let created else {
-                print("[OpenBeam] NDIlib_recv_create_v3 failed for \(source) (\(self.name))")
-                self.state.withLock { if $0.generation == generation { $0.running = false } }
-                NDIRuntime.release()
-                return
-            }
-
-            print("[OpenBeam] \(self.name) started — source: \(source)")
-            while self.state.withLock({ $0.running && $0.generation == generation }) {
-                capture(created)
-            }
-
-            NDIlib_recv_destroy(created)
-            NDIRuntime.release()
-            print("[OpenBeam] \(self.name) stopped")
         }
+    }
+
+    /// Make before break: `old` keeps playing until `new` is connected, for up
+    /// to three seconds. What `new` queued meanwhile is dropped, so the switch
+    /// adds no delay. False if it never connected.
+    private static func connect(_ new: NDIlib_recv_instance_t, whileCapturing old: NDIlib_recv_instance_t,
+                                _ capture: (NDIlib_recv_instance_t) -> Void, until running: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(3)
+        while running(), Date() < deadline {
+            capture(old)
+            guard NDIlib_recv_get_no_connections(new) > 0 else { continue }
+            var video = NDIlib_video_frame_v2_t(), audio = NDIlib_audio_frame_v3_t(), metadata = NDIlib_metadata_frame_t()
+            while true {
+                switch NDIlib_recv_capture_v3(new, &video, &audio, &metadata, 0) {
+                case NDIlib_frame_type_video: NDIlib_recv_free_video_v2(new, &video)
+                case NDIlib_frame_type_audio: NDIlib_recv_free_audio_v3(new, &audio)
+                case NDIlib_frame_type_metadata: NDIlib_recv_free_metadata(new, &metadata)
+                default: return true
+                }
+            }
+        }
+        return false
     }
 
     func stop() {

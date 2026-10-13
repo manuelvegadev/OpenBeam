@@ -50,6 +50,15 @@ final class NDIFinder: @unchecked Sendable {
     /// at this instant; discovery keeps filling in for a second or two after
     /// `start()`, which is why the menu re-reads it on every open.
     var sources: [String] {
+        current().map(\.name)
+    }
+
+    /// Where `source` is, "ip:port", once discovery has found it.
+    func url(of source: String) -> String? {
+        current().first { $0.name == source }?.url
+    }
+
+    private func current() -> [(name: String, url: String?)] {
         queue.sync {
             guard let instance else { return [] }
 
@@ -57,9 +66,9 @@ final class NDIFinder: @unchecked Sendable {
             guard let list = NDIlib_find_get_current_sources(instance, &count) else { return [] }
 
             // The array belongs to the finder and is valid only until the next
-            // call, so the names are copied out here rather than handed on.
+            // call, so the strings are copied out here rather than handed on.
             return (0..<Int(count)).compactMap { index in
-                list[index].p_ndi_name.map { String(cString: $0) }
+                list[index].p_ndi_name.map { (String(cString: $0), list[index].p_url_address.map { String(cString: $0) }) }
             }
         }
     }
