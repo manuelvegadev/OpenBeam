@@ -99,7 +99,7 @@ struct ScreenOfferPayload: Codable {
     var requestID: String
     var sessionID: Data
     var key: Data
-    var port: Int
+    var port: UInt16  // a JSON number out of range fails the decode
     var endpoints: [Endpoint]
     var display: Display
     var originID: String

@@ -44,6 +44,8 @@ final class RemoteScreenViewer: @unchecked Sendable {
     private var inputFD: Int32 = -1
     private var inputSender: RecordSender?  // inputQueue only
     private var pingTimer: DispatchSourceTimer?
+    /// Watches for a better link than the one the session came up on.
+    private var linkProbe: DispatchSourceTimer?
     private var ended = false
     private var lastPongNs: UInt64 = 0
     private var clockSamples: [(rtt: UInt64, offset: Int64)] = []
@@ -87,6 +89,7 @@ final class RemoteScreenViewer: @unchecked Sendable {
         for fd in [videoFD, inputFD] where fd >= 0 { shutdown(fd, SHUT_RDWR) }
         lock.unlock()
         pingTimer?.cancel()
+        linkProbe?.cancel()
         viewerLog.info("session ended: \(String(describing: end), privacy: .public)")
         report(.ended(end))
     }
@@ -175,16 +178,60 @@ final class RemoteScreenViewer: @unchecked Sendable {
         }
         report(.streaming)
         startClockProbe(input)
+        if let better = endpoints.first, better != endpoint { watchForBetterLink(better) }
         receiveVideo(video)
     }
 
+    /// A link that was not up yet when the session started — the Thunderbolt
+    /// bridge takes a while after boot — leaves it on Wi-Fi for good otherwise.
+    /// Asked every few seconds whether the better address answers; once it
+    /// does, the session ends and the reconnect picks it.
+    private func watchForBetterLink(_ better: ScreenOfferPayload.Endpoint) {
+        let port = offer.port
+        let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        timer.schedule(deadline: .now() + 3, repeating: 5)
+        timer.setEventHandler { [weak self] in
+            guard Self.answers(better.address, port) else { return }
+            viewerLog.info("\(better.link, privacy: .public) is up; reconnecting to use it")
+            self?.stop(.failed("\(better.link) became available"))
+        }
+        timer.resume()
+        lock.lock()
+        if ended { timer.cancel() } else { linkProbe = timer }
+        lock.unlock()
+    }
+
+    /// Whether the host answers at that address at all. The session's port is
+    /// closed once both channels are bound, so a refusal counts: it came from
+    /// the host, over that link. Given 3 s, because macOS takes a full second
+    /// to report a refusal — measured, on any port of the bridge.
+    private static func answers(_ address: String, _ port: UInt16) -> Bool {
+        guard let (fd, error) = dial(address, port, timeoutMs: 3000) else { return false }
+        close(fd)
+        return error == 0 || error == ECONNREFUSED
+    }
+
     /// Opens a TCP connection within 1 s, or gives up.
-    private static func connect(_ address: String, _ port: Int) -> Int32? {
+    private static func connect(_ address: String, _ port: UInt16) -> Int32? {
+        guard let (fd, error) = dial(address, port, timeoutMs: 1000) else { return nil }
+        guard error == 0 else {
+            close(fd)
+            return nil
+        }
+        setSocketOption(fd, IPPROTO_TCP, TCP_NODELAY, 1)
+        setSocketOption(fd, SOL_SOCKET, SO_NOSIGPIPE, 1)
+        setSocketOption(fd, SOL_SOCKET, SO_RCVBUF, 16 << 20)
+        return fd
+    }
+
+    /// A connect waited on for up to `timeoutMs`: the blocking socket and how
+    /// the attempt ended (0 once connected), or nil when nothing answered.
+    private static func dial(_ address: String, _ port: UInt16, timeoutMs: Int32) -> (fd: Int32, error: Int32)? {
         let fd = socket(AF_INET, SOCK_STREAM, 0)
         var addr = sockaddr_in()
         addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
         addr.sin_family = sa_family_t(AF_INET)
-        addr.sin_port = UInt16(port).bigEndian
+        addr.sin_port = port.bigEndian
         guard inet_pton(AF_INET, address, &addr.sin_addr) == 1 else {
             close(fd)
             return nil
@@ -194,20 +241,16 @@ final class RemoteScreenViewer: @unchecked Sendable {
         let rc = withUnsafePointer(to: &addr) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
         }
+        if rc != 0, errno != EINPROGRESS { return (fd, errno) }
         var pfd = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
         var error: Int32 = 0
         var length = socklen_t(MemoryLayout<Int32>.size)
-        guard rc == 0 || errno == EINPROGRESS, poll(&pfd, 1, 1000) == 1,
-              getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &length) == 0, error == 0
-        else {
+        guard poll(&pfd, 1, timeoutMs) == 1, getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &length) == 0 else {
             close(fd)
             return nil
         }
         _ = fcntl(fd, F_SETFL, flags)
-        setSocketOption(fd, IPPROTO_TCP, TCP_NODELAY, 1)
-        setSocketOption(fd, SOL_SOCKET, SO_NOSIGPIPE, 1)
-        setSocketOption(fd, SOL_SOCKET, SO_RCVBUF, 16 << 20)
-        return fd
+        return (fd, error)
     }
 
     /// Sends the preamble and BIND; returns the sender for the rest of that direction.

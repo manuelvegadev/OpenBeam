@@ -132,7 +132,7 @@ final class RemoteScreenHost: @unchecked Sendable {
             close(fd)
             throw RemoteScreenError.io("listen", code)
         }
-        let port = Int(UInt16(bigEndian: addr.sin_port))
+        let port = UInt16(bigEndian: addr.sin_port)
         let endpoints = RemoteScreenEndpoints.current()
         guard !endpoints.isEmpty else {
             close(fd)
