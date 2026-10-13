@@ -62,7 +62,7 @@ final class RemoteScreenDisplayPicker: NSView {
 
     /// The arrangement's own extent, in host points.
     private var union: CGRect {
-        displays.reduce(CGRect.null) { $0.union(CGRect(x: $1.x, y: $1.y, width: $1.pointWidth, height: $1.pointHeight)) }
+        displays.reduce(CGRect.null) { $0.union($1.frame) }
     }
 
     /// The arrangement scaled to fit the largest area the panel allows.

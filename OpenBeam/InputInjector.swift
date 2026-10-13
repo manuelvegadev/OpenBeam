@@ -112,11 +112,26 @@ final class InputInjector: RemoteInputSink, @unchecked Sendable {
 
     // MARK: - Posting
 
-    /// A normalized position on the captured display, in global points.
+    /// A normalized position on the captured display, in global points. Past
+    /// 0…1 the pointer has gone on to another of this Mac's displays (the
+    /// viewer follows it there by the host's own arrangement), and lands on the
+    /// nearest point of a display.
     private func location(_ e: InputEventMessage) -> CGPoint {
         let b = CGDisplayBounds(displayID)
-        let x = min(max(e.x, 0), 1), y = min(max(e.y, 0), 1)
-        return CGPoint(x: b.minX + min(x * b.width, b.width - 1), y: b.minY + min(y * b.height, b.height - 1))
+        guard (0...1).contains(e.x), (0...1).contains(e.y) else {
+            // Finite, as decoded, but far out enough to make no sense.
+            let x = min(max(e.x, -1000), 1000), y = min(max(e.y, -1000), 1000)
+            return Self.nearestOnDisplays(CGPoint(x: b.minX + x * b.width, y: b.minY + y * b.height)) ?? CGPoint(x: b.midX, y: b.midY)
+        }
+        return CGPoint(x: b.minX + min(e.x * b.width, b.width - 1), y: b.minY + min(e.y * b.height, b.height - 1))
+    }
+
+    /// The point of the active displays closest to `p`.
+    private static func nearestOnDisplays(_ p: CGPoint) -> CGPoint? {
+        var ids = [CGDirectDisplayID](repeating: 0, count: 16)
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(UInt32(ids.count), &ids, &count) == .success else { return nil }
+        return ids.prefix(Int(count)).map(CGDisplayBounds).nearestPoint(to: p)
     }
 
     private static func types(for button: UInt8) -> (down: CGEventType, up: CGEventType, drag: CGEventType) {

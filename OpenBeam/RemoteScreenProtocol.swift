@@ -119,6 +119,38 @@ struct ScreenDisplayInfo: Codable, Equatable {
     var main: Bool
 }
 
+extension ScreenDisplayInfo {
+    /// Where it sits in the host's desktop, in points.
+    var frame: CGRect { CGRect(x: x, y: y, width: pointWidth, height: pointHeight) }
+
+    /// A point of the host's desktop at a 0…1 position over this display.
+    func point(atNormalized n: (Double, Double)) -> CGPoint {
+        CGPoint(x: x + n.0 * pointWidth, y: y + n.1 * pointHeight)
+    }
+
+    /// A point of the host's desktop as a position over this display, 0…1 on it.
+    func normalized(_ p: CGPoint) -> (Double, Double) {
+        (Double((p.x - x) / pointWidth), Double((p.y - y) / pointHeight))
+    }
+}
+
+extension CGRect {
+    /// The point of this rectangle closest to `p`, its far edges excluded as a
+    /// pointer's are.
+    func clamping(_ p: CGPoint) -> CGPoint {
+        CGPoint(x: Swift.min(Swift.max(p.x, minX), maxX - 1), y: Swift.min(Swift.max(p.y, minY), maxY - 1))
+    }
+}
+
+extension Sequence where Element == CGRect {
+    /// The point of any of these rectangles closest to `p`: where a pointer
+    /// pushed off the desktop at `p` stays.
+    func nearestPoint(to p: CGPoint) -> CGPoint? {
+        func distance(_ q: CGPoint) -> CGFloat { (q.x - p.x) * (q.x - p.x) + (q.y - p.y) * (q.y - p.y) }
+        return map { $0.clamping(p) }.min { distance($0) < distance($1) }
+    }
+}
+
 /// Host → viewer: the displays the host can share, and which one it is sharing.
 struct ScreenDisplaysPayload: Codable {
     var kind = "screen.displays"

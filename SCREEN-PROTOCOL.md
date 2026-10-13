@@ -282,13 +282,13 @@ keyCode        UInt16   kinds 5–7: macOS virtual keycode (kVK_*)
 scrollPhase    UInt8    kind 4: NSEvent.Phase raw value; else 0
 momentumPhase  UInt8    kind 4: momentum NSEvent.Phase raw value; else 0
 flags          UInt64   modifier flags in CGEventFlags bit positions (Fn = 0x800000)
-x              Float64  kinds 1–3: 0…1 from the host display's left edge; kind 4: horizontal delta
-y              Float64  kinds 1–3: 0…1 from the host display's top edge;  kind 4: vertical delta
+x              Float64  kinds 1–3: 0…1 from the host display's left edge (past it: another display); kind 4: horizontal delta
+y              Float64  kinds 1–3: 0…1 from the host display's top edge (past it: another display);  kind 4: vertical delta
 seq            UInt64   1, 2, 3 … per session, no gaps
 sentViewerNs   UInt64   when the viewer sent it
 ```
 
-- **Pointer** positions are **absolute and normalized** to the captured display. The viewer maps its own coordinates through the frame's on-screen rectangle, so a letterboxed or scaled view still lands on the right pixel. The host scales to its display's bounds in points. A `move` while any button is held is a drag.
+- **Pointer** positions are **absolute and normalized** to the captured display. The viewer maps its own coordinates through the frame's on-screen rectangle, so a letterboxed or scaled view still lands on the right pixel. The host scales to its display's bounds in points. A position outside 0…1 continues past the captured display's edge into the host's desktop, in the same units: the host moves its pointer to the nearest point of any of its displays. Viewers send one when the pointer crosses onto a host display that is not being shown (they know the arrangement from `screen.displays`); positions inside 0…1 land on the captured display, its far edges included. A `move` while any button is held is a drag.
 - **Keys** travel as **physical keycodes**, never as characters. The host's own input source turns them into characters, so layouts, dead keys and input methods behave as they would locally. `flags` is authoritative: the host sets it on every key event it posts.
 - **Modifiers** (kind 7) are sent whenever the modifier state changes, Fn included, with `keyCode` naming the modifier key that changed.
 - **Media keys** (kind 8) are the keys macOS delivers apart from the keyboard proper: volume, brightness, play and skip. They are optional for the viewer — whether they act on the viewer's Mac or the host is the user's choice — and a host posts them as the system would.

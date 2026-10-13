@@ -11,8 +11,8 @@ import AppKit
 
 final class RemoteScreenInput {
     /// Chords the viewer keeps for itself instead of sending: ⌃⌥⌘F toggles
-    /// fullscreen, ⌃⌥⌘W closes the viewer, ⌃⌥⌘R hands the keyboard back to this
-    /// Mac, ⌃⌥⌘← / → switch the host display and ⌃⌥⌘↓ shows them all.
+    /// fullscreen, ⌃⌥⌘W closes the viewer, ⌃⌥⌘R hands the pointer and keyboard
+    /// back to this Mac and takes them again, ⌃⌥⌘← / → switch the host display and ⌃⌥⌘↓ shows them all.
     /// Everything else goes to the host.
     private static let localChord: NSEvent.ModifierFlags = [.control, .option, .command]
 
@@ -28,12 +28,33 @@ final class RemoteScreenInput {
     /// it returns whether it used the key.
     var localKeys: ((UInt16) -> Bool)?
     /// While true, the pointer stays on this Mac (the picker is open over the picture).
-    var pointerSuspended = false
+    var pointerSuspended = false {
+        didSet { if pointerSuspended { comeBack() } }
+    }
     /// The pointer came onto the picture (true) or left it (false). Main queue.
     var onPointerCrossing: ((Bool) -> Void)?
+    /// ⌃⌥⌘R gave the pointer and keyboard back to this Mac (false), or took
+    /// them for the host again (true). Main queue.
+    var onAttach: ((Bool) -> Void)?
     /// The pointer left the picture with a button held: the drag is still the
     /// host's, and the pointer counts as gone once the button comes up.
     private var leftWhileHeld = false
+    private var pointerInside = false
+    /// ⌃⌥⌘R let go of the host with the pointer still on the picture: it
+    /// moves this Mac's cursor until ⌃⌥⌘R, a click, or leaving and coming back.
+    private var detached = false
+
+    /// The host's displays as it arranges them, and the one in the picture.
+    /// Where an edge of the picture meets another host display and this Mac
+    /// has no screen past it, the pointer goes on to that display.
+    var hostDisplays: [ScreenDisplayInfo] = []
+    var currentDisplay: UInt32 = 0 {
+        didSet { if currentDisplay != oldValue { comeBack() } }
+    }
+    /// The host's pointer while it is on a display outside the picture, in the
+    /// host's global points. This Mac's cursor is held still at the edge it
+    /// crossed, and its movement steers the host's.
+    private var beyond: CGPoint?
 
     init(viewer: RemoteScreenViewer) {
         self.viewer = viewer
@@ -49,13 +70,28 @@ final class RemoteScreenInput {
             }
         }
         guard !pointerSuspended else { return }
-        let (x, y) = normalized(event, in: view)
         let kind: InputEventMessage.Kind
         switch event.type {
         case .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged: kind = .move
         case .leftMouseDown, .rightMouseDown, .otherMouseDown: kind = .buttonDown
         case .leftMouseUp, .rightMouseUp, .otherMouseUp: kind = .buttonUp
         default: return
+        }
+        if detached {
+            guard kind == .buttonDown else { return }
+            attach()  // a click on the picture takes the host back, and is the host's
+        }
+        let (x, y): (Double, Double)
+        if kind == .move, beyond != nil {
+            (x, y) = follow(event, in: view)
+        } else if kind == .move, let crossed = crossing(event, in: view) {
+            beyond = crossed
+            CGAssociateMouseAndMouseCursorPosition(0)  // hold this Mac's cursor at the edge
+            (x, y) = hostNormalized(crossed)
+        } else if let beyond {
+            (x, y) = hostNormalized(beyond)
+        } else {
+            (x, y) = normalized(event, in: view)
         }
         let button = kind == .move ? 0 : UInt8(clamping: event.buttonNumber)
         let clicks = kind == .move ? 0 : UInt8(clamping: event.clickCount)
@@ -82,13 +118,124 @@ final class RemoteScreenInput {
 
     func pointerEntered() {
         leftWhileHeld = false
+        pointerInside = true
+        detached = false
         hideCursor()
         onPointerCrossing?(true)
     }
 
     func pointerExited() {
+        pointerInside = false
+        detached = false
+        comeBack()
         showCursor()
         if NSEvent.pressedMouseButtons != 0 { leftWhileHeld = true } else { onPointerCrossing?(false) }
+    }
+
+    // MARK: Other host displays
+
+    private var current: ScreenDisplayInfo? {
+        hostDisplays.first { $0.id == currentDisplay }
+    }
+
+    /// Host points per point of the picture here; 1 in full screen when both
+    /// Macs run the display at the same size.
+    private func scale(in view: ScreenView) -> CGFloat {
+        guard let current, view.imageRect.width > 0 else { return 1 }
+        return current.pointWidth / view.imageRect.width
+    }
+
+    /// Where the host's pointer goes past the edge of the picture, if this
+    /// Mac's cursor is pressed against the edge of its screens there and a host
+    /// display lies on the other side. Where this Mac has a screen past that
+    /// edge, the cursor simply moves onto it and leaves the host.
+    private func crossing(_ event: NSEvent, in view: ScreenView) -> CGPoint? {
+        guard hostDisplays.count > 1, let current else { return nil }
+        let dx = event.deltaX, dy = event.deltaY  // y grows downward, as on the host
+        let here = NSEvent.mouseLocation  // y grows upward
+        func onScreenHere(_ p: NSPoint) -> Bool { NSScreen.screens.contains { $0.frame.contains(p) } }
+        let pressedX = dx != 0 && !onScreenHere(NSPoint(x: here.x + (dx > 0 ? 2 : -2), y: here.y))
+        let pressedY = dy != 0 && !onScreenHere(NSPoint(x: here.x, y: here.y + (dy > 0 ? -2 : 2)))
+        guard pressedX || pressedY else { return nil }
+        let s = scale(in: view)
+        var p = current.point(atNormalized: normalized(event, in: view))
+        if pressedX { p.x += dx > 0 ? max(dx * s, 1) : min(dx * s, -1) }
+        if pressedY { p.y += dy > 0 ? max(dy * s, 1) : min(dy * s, -1) }
+        guard hostDisplays.contains(where: { $0.id != current.id && $0.frame.contains(p) }) else { return nil }
+        return p
+    }
+
+    /// Moves the host's pointer outside the picture by this event's movement,
+    /// over the host's displays as macOS would. Once it is back over the
+    /// picture, this Mac's cursor is let go there and follows it again.
+    private func follow(_ event: NSEvent, in view: ScreenView) -> (Double, Double) {
+        guard var p = beyond, let current else { return normalized(event, in: view) }
+        let s = scale(in: view)
+        p.x += event.deltaX * s
+        p.y += event.deltaY * s
+        p = hostDisplays.map(\.frame).nearestPoint(to: p) ?? p
+        guard current.frame.contains(p) else {
+            beyond = p
+            return hostNormalized(p)
+        }
+        comeBack()
+        let n = current.normalized(p)
+        warp(to: n, in: view)
+        return n
+    }
+
+    /// A host point as the wire carries it: 0…1 over the picture, beyond that
+    /// on another display. Taken at the middle of the point, so a point just
+    /// past the picture's right or bottom edge does not read as exactly 1.
+    private func hostNormalized(_ p: CGPoint) -> (Double, Double) {
+        current?.normalized(CGPoint(x: p.x + 0.5, y: p.y + 0.5)) ?? (0.5, 0.5)
+    }
+
+    /// Puts this Mac's cursor over a normalized point of the picture.
+    private func warp(to n: (Double, Double), in view: ScreenView) {
+        guard let window = view.window, let primary = NSScreen.screens.first else { return }
+        let r = view.imageRect
+        let inView = NSPoint(x: r.minX + n.0 * r.width, y: r.maxY - n.1 * r.height)
+        let onScreen = window.convertPoint(toScreen: view.convert(inView, to: nil))
+        CGWarpMouseCursorPosition(CGPoint(x: onScreen.x, y: primary.frame.maxY - onScreen.y))
+        CGAssociateMouseAndMouseCursorPosition(1)  // also ends the pause in mouse events that follows a warp
+    }
+
+    /// Lets go of this Mac's cursor where it was held, if the host's pointer
+    /// was on another display; that pointer stays where it is.
+    private func comeBack() {
+        guard beyond != nil else { return }
+        beyond = nil
+        CGAssociateMouseAndMouseCursorPosition(1)
+    }
+
+    // MARK: Detaching
+
+    /// ⌃⌥⌘R: gives the pointer and keyboard back to this Mac, or, pressed again
+    /// with the pointer still on the picture, takes them for the host.
+    private func toggleAttached() {
+        if detached {
+            attach()
+        } else {
+            detached = pointerInside
+            releaseAll()
+            onAttach?(false)
+        }
+    }
+
+    private func attach() {
+        detached = false
+        hideCursor()
+        onAttach?(true)
+    }
+
+    /// From the system-wide tap while the viewer is not focused: ⌃⌥⌘R with the
+    /// pointer detached over the picture takes the host back. True if it did.
+    func reattachChord(_ event: CGEvent) -> Bool {
+        guard detached, Self.isLocalChord(event.flags), Self.keyCode(event) == 15  // kVK_ANSI_R
+        else { return false }
+        DispatchQueue.main.async { [weak self] in self?.attach() }
+        return true
     }
 
     private func hideCursor() {
@@ -117,11 +264,9 @@ final class RemoteScreenInput {
     /// as global shortcuts, except the viewer's own chords, which run here, and
     /// keys the display picker is taking. Main thread.
     func key(_ event: CGEvent, type: CGEventType, in window: NSWindow?) {
-        let keyCode = UInt16(truncatingIfNeeded: event.getIntegerValueField(.keyboardEventKeycode))
+        let keyCode = Self.keyCode(event)
         let flags = event.flags
-        if type == .keyDown,
-           NSEvent.ModifierFlags(rawValue: UInt(flags.rawValue)).intersection([.control, .option, .command, .shift]) == Self.localChord,
-           runLocalChord(keyCode: keyCode, in: window) {
+        if type == .keyDown, Self.isLocalChord(flags), runLocalChord(keyCode: keyCode, in: window) {
             return
         }
         if type != .flagsChanged, let localKeys {
@@ -130,6 +275,15 @@ final class RemoteScreenInput {
         }
         let kind: InputEventMessage.Kind = type == .keyDown ? .keyDown : type == .keyUp ? .keyUp : .modifiersChanged
         viewer?.send(InputEventMessage(kind: kind, keyCode: keyCode, flags: flags.rawValue))
+    }
+
+    private static func keyCode(_ event: CGEvent) -> UInt16 {
+        UInt16(truncatingIfNeeded: event.getIntegerValueField(.keyboardEventKeycode))
+    }
+
+    /// ⌃⌥⌘ and nothing else but Caps Lock or Fn.
+    private static func isLocalChord(_ flags: CGEventFlags) -> Bool {
+        NSEvent.ModifierFlags(rawValue: UInt(flags.rawValue)).intersection([.control, .option, .command, .shift]) == localChord
     }
 
     /// Runs the viewer's own chord for this key, if it is one. Keycodes, not
@@ -141,10 +295,7 @@ final class RemoteScreenInput {
         switch keyCode {
         case 3: action = { window?.toggleFullScreen(nil) }  // kVK_ANSI_F
         case 13: action = { window?.close() }  // kVK_ANSI_W; a borderless full-screen window has no close button to "perform"
-        case 15: action = { [weak self] in  // kVK_ANSI_R: let go, and give the keyboard back to this Mac
-            self?.releaseAll()
-            NSApp.deactivate()
-        }
+        case 15: action = { [weak self] in self?.toggleAttached() }  // kVK_ANSI_R
         case 123: action = { [weak self] in self?.onLocalCommand?(.previousDisplay) }  // kVK_LeftArrow
         case 124: action = { [weak self] in self?.onLocalCommand?(.nextDisplay) }  // kVK_RightArrow
         case 125: action = { [weak self] in self?.onLocalCommand?(.displayPicker) }  // kVK_DownArrow
@@ -166,6 +317,7 @@ final class RemoteScreenInput {
 
     /// Lets go of everything on the host, for when this window stops receiving input.
     func releaseAll() {
+        comeBack()
         showCursor()
         viewer?.releaseAll()
     }
@@ -239,7 +391,10 @@ final class SystemKeyboardCapture {
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
             return Unmanaged.passUnretained(event)
         case .keyDown, .keyUp, .flagsChanged:
-            guard isFocused() else { return Unmanaged.passUnretained(event) }
+            guard isFocused() else {
+                if type == .keyDown, input.reattachChord(event) { return nil }
+                return Unmanaged.passUnretained(event)
+            }
             input.key(event, type: type, in: window)
             return nil  // the host's now, not this Mac's
         default:

@@ -422,7 +422,7 @@ private struct RemoteScreenPane: View {
             } header: {
                 Text("When viewing another Mac")
             } footer: {
-                footnote("⌃⌥⌘R gives the keyboard back to this Mac, ⌃⌥⌘F toggles full screen and ⌃⌥⌘W closes the viewer.")
+                footnote("⌃⌥⌘R gives the pointer and keyboard back to this Mac and takes them again, ⌃⌥⌘F toggles full screen and ⌃⌥⌘W closes the viewer.")
             }
         }
         .formStyle(.grouped)

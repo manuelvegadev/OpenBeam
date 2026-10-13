@@ -593,7 +593,6 @@ final class RemoteScreenWindowController: NSWindowController, NSWindowDelegate {
         window.backgroundColor = .black
         window.collectionBehavior = [.fullScreenPrimary]
         window.contentAspectRatio = aspect
-        window.acceptsMouseMovedEvents = true
         super.init(window: window)
         window.delegate = self
 
@@ -629,6 +628,9 @@ final class RemoteScreenWindowController: NSWindowController, NSWindowDelegate {
         let input = RemoteScreenInput(viewer: viewer)
         input.onLocalCommand = { [weak self] command in self?.run(command) }
         input.onPointerCrossing = { [weak self] inside in self?.pointerCrossed(inside: inside) }
+        input.onAttach = { [weak self] attached in self?.pointerAttached(attached) }
+        input.hostDisplays = picker.displays
+        input.currentDisplay = picker.current
         view.input = input
         self.input = input
         self.viewer = viewer
@@ -692,10 +694,23 @@ final class RemoteScreenWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
+    /// ⌃⌥⌘R let go of the host (false) or took it back (true), the keyboard with it.
+    private func pointerAttached(_ attached: Bool) {
+        guard let window else { return }
+        if attached {
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKey()
+        } else if NSApp.isActive {
+            NSApp.deactivate()
+        }
+    }
+
     // MARK: - Host displays
 
     /// The host's displays, from `screen.displays`.
     func updateDisplays(_ displays: [ScreenDisplayInfo], current: UInt32) {
+        input?.hostDisplays = displays
+        input?.currentDisplay = current
         picker.update(displays: displays, current: current)
     }
 
