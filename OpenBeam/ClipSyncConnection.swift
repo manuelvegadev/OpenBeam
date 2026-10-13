@@ -111,6 +111,23 @@ final class ClipSyncConnection: @unchecked Sendable {
         }
     }
 
+    /// Frames handed to `send` that the transport has not taken yet, and when
+    /// the last payload arrived.
+    private let traffic = OSAllocatedUnfairLock(initialState: (unsent: 0, lastReceived: Date.distantPast))
+    /// Frames are still on their way out, or arriving — a transfer, say: a
+    /// session swapped for another now would lose some.
+    var isBusy: Bool { traffic.withLock { $0.unsent > 0 || -$0.lastReceived.timeIntervalSinceNow < 3 } }
+
+    /// The interface this connection runs over ("bridge0", "en0"), once connected.
+    var interfaceName: String? {
+        if let name = connection.currentPath?.availableInterfaces.first?.name { return name }
+        // A scoped local address names it too: "fe80::1%bridge0".
+        guard case .hostPort(let host, _)? = connection.currentPath?.localEndpoint,
+              case .ipv6(let address) = host, let interface = address.interface
+        else { return nil }
+        return interface.name
+    }
+
     /// Through close(), so the delegate hears of it: a connection cancelled
     /// without a word stayed in the manager's pairing and dialing tables, and a
     /// peer left in `dialing` was never dialled again.
@@ -197,7 +214,9 @@ final class ClipSyncConnection: @unchecked Sendable {
                 close(with: ClipSyncError.frameTooLarge(body.count))
                 return
             }
+            traffic.withLock { $0.unsent += 1 }
             connection.send(content: framed, completion: .contentProcessed { [weak self] err in
+                self?.traffic.withLock { $0.unsent -= 1 }
                 if let err {
                     self?.close(with: err)
                     return
@@ -499,6 +518,7 @@ final class ClipSyncConnection: @unchecked Sendable {
                 $0.recvCounter = env.n
                 $0.recvHasCounter = true
             }
+            traffic.withLock { $0.lastReceived = Date() }
             delegate?.connection(self, didReceivePayload: plain)
         } catch {
             throw ClipSyncError.decryptFailed

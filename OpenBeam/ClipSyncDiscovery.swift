@@ -3,7 +3,7 @@
 //  OpenBeam
 //
 //  mDNS advertise + browse for ClipSync v1 (`_clipsync._tcp`). Filters out our
-//  own peerID and dedupes peers across multiple network interfaces.
+//  own peerID and, of the interfaces a peer is seen on, keeps the best link.
 //
 //  TCP listening uses NWListener; mDNS publish + browse goes through the
 //  legacy `dns_sd.h` API (see ClipSyncBonjour.swift) to bypass macOS 15+'s
@@ -136,11 +136,21 @@ final class ClipSyncDiscovery: @unchecked Sendable {
 
     private func handle(results: Set<BonjourBrowser.Result>) {
         var collected: [String: DiscoveredPeer] = [:]
+        let links = NetworkLinks.byInterface()
 
-        for r in results {
+        // A peer is seen once per interface it shares with us. The best link
+        // wins — the Thunderbolt cable, then wired Ethernet, then Wi-Fi — and
+        // on a link, an answer whose addresses are known.
+        func preferred(_ a: BonjourBrowser.Result, _ b: BonjourBrowser.Result) -> Bool {
+            let (la, lb) = (links[a.interface, default: .other], links[b.interface, default: .other])
+            if la != lb { return la < lb }
+            if a.addresses.isEmpty != b.addresses.isEmpty { return !a.addresses.isEmpty }
+            return a.interface < b.interface
+        }
+        for r in results.sorted(by: preferred) {
             // Service instance name == peerID (we set it that way).
             let id = r.txt["id"] ?? r.name
-            guard id != identity.peerID else { continue }    // skip self
+            guard id != identity.peerID, collected[id] == nil else { continue }    // skip self; best first
 
             let name = r.txt["name"] ?? id
             let os = r.txt["os"] ?? "unknown"
@@ -150,20 +160,17 @@ final class ClipSyncDiscovery: @unchecked Sendable {
             // follows a peer that restarts onto a new port. Not a service
             // endpoint: Network.framework's Bonjour path is the one that fails
             // with NoAuth on ad-hoc builds (see ClipSyncBonjour.swift).
-            let endpoint = NWEndpoint.hostPort(
-                host: NWEndpoint.Host(r.host),
-                port: NWEndpoint.Port(rawValue: r.port) ?? .any
-            )
+            let port = NWEndpoint.Port(rawValue: r.port) ?? .any
+            let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(Self.dialAddress(r) ?? r.host), port: port)
 
-            if collected[id] == nil {
-                collected[id] = DiscoveredPeer(
-                    peerID: id,
-                    displayName: name,
-                    os: os,
-                    endpoint: NetworkEndpointBox(endpoint as AnyObject),
-                    protocolVersion: v
-                )
-            }
+            collected[id] = DiscoveredPeer(
+                peerID: id,
+                displayName: name,
+                os: os,
+                endpoint: NetworkEndpointBox(endpoint as AnyObject),
+                protocolVersion: v,
+                link: links[r.interface, default: .other]
+            )
         }
 
         let nextPeers = collected
@@ -174,10 +181,19 @@ final class ClipSyncDiscovery: @unchecked Sendable {
         }
 
         if prev.keys != nextPeers.keys || prev != nextPeers {
-            log.info("peers changed: \(nextPeers.count, privacy: .public) visible")
+            let described = nextPeers.values.map { "\($0.displayName) via \($0.link.rawValue) at \(String(describing: $0.endpoint.underlying))" }.joined(separator: ", ")
+            log.info("peers changed: \(nextPeers.count, privacy: .public) visible: \(described, privacy: .public)")
             let list = Array(nextPeers.values).sorted { $0.displayName < $1.displayName }
             onPeersChanged?(list)
         }
+    }
+
+    /// The address that keeps a dial on the interface the peer was seen on:
+    /// its IPv6 link-local address scoped to that interface ("fe80::1%bridge0"),
+    /// which no other interface can take. A hostname, or a plain IPv4 address
+    /// when two interfaces share a subnet, can leave by any of them.
+    private static func dialAddress(_ r: BonjourBrowser.Result) -> String? {
+        r.addresses.first { $0.hasPrefix("fe80:") } ?? r.addresses.first { !$0.contains(":") }
     }
 
     /// Resolve a `DiscoveredPeer` back to an `NWEndpoint` for `NWConnection`.

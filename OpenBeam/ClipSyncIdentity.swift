@@ -30,6 +30,8 @@ struct DiscoveredPeer: Hashable {
     let os: String
     let endpoint: NetworkEndpointBox    // see below — wraps NWEndpoint for Hashable
     let protocolVersion: Int
+    /// The kind of link `endpoint` is on.
+    let link: NetworkLink
 }
 
 /// Tiny wrapper so `DiscoveredPeer` can be `Hashable` even though `NWEndpoint`

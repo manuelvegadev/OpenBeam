@@ -258,9 +258,9 @@ final class RemoteScreenHost: @unchecked Sendable {
         // (the cable came out, and it reconnected over Ethernet or Wi-Fi) gets
         // half the size at no more than 60 fps, which those links can carry.
         let link = link(ofLocalAddressOf: fd)
-        if link != "thunderbolt" {
+        if link != .thunderbolt {
             minFrameIntervalNs = max(minFrameIntervalNs, 1_000_000_000 / 60)
-            hostLog.info("viewer is on \(link, privacy: .public): half size, 60 fps at most")
+            hostLog.info("viewer is on \(link.rawValue, privacy: .public): half size, 60 fps at most")
         }
         capture.onFrame = { [weak self] frame in self?.submit(frame) }
         capture.onStop = { [weak self] in
@@ -276,7 +276,7 @@ final class RemoteScreenHost: @unchecked Sendable {
         reader.start()
         controlQueue.async {
             self.watchingDisplays = true
-            if link != "thunderbolt", let request = self.request {
+            if link != .thunderbolt, let request = self.request {
                 self.request?.maxWidth = request.maxWidth / 2
                 self.request?.maxHeight = request.maxHeight / 2
             }
@@ -418,15 +418,15 @@ final class RemoteScreenHost: @unchecked Sendable {
     }
 
     /// Which of the offered links a connected socket arrived on.
-    private func link(ofLocalAddressOf fd: Int32) -> String {
+    private func link(ofLocalAddressOf fd: Int32) -> NetworkLink {
         var addr = sockaddr_in()
         var length = socklen_t(MemoryLayout<sockaddr_in>.size)
         let ok = withUnsafeMutablePointer(to: &addr) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &length) == 0 }
         }
-        guard ok else { return "other" }
+        guard ok else { return .other }
         let address = ipv4String(addr.sin_addr)
-        return endpoints.first { $0.address == address }?.link ?? "other"
+        return NetworkLink(wire: endpoints.first { $0.address == address }?.link ?? "")
     }
 
     /// Newest wins: a capture that arrives before the previous one went out takes
@@ -721,40 +721,10 @@ final class RemoteScreenHost: @unchecked Sendable {
 enum RemoteScreenEndpoints {
 
     static func current() -> [ScreenOfferPayload.Endpoint] {
-        // Link kind by BSD name. "Thunderbolt" is a brand, so the localized names
-        // keep it: "Thunderbolt Bridge" (bridge0) and "Thunderbolt 1…" (en1…).
-        var links: [String: String] = [:]
-        for case let interface as SCNetworkInterface in (SCNetworkInterfaceCopyAll() as NSArray) {
-            guard let bsd = SCNetworkInterfaceGetBSDName(interface).map({ $0 as String }) else { continue }
-            let type = SCNetworkInterfaceGetInterfaceType(interface).map { $0 as String } ?? ""
-            let name = SCNetworkInterfaceGetLocalizedDisplayName(interface).map { $0 as String } ?? ""
-            if name.contains("Thunderbolt") {
-                links[bsd] = "thunderbolt"
-            } else if type == (kSCNetworkInterfaceTypeIEEE80211 as String) {
-                links[bsd] = "wifi"
-            } else if type == (kSCNetworkInterfaceTypeEthernet as String) {
-                links[bsd] = "ethernet"
-            } else {
-                links[bsd] = "other"
-            }
-        }
-
-        var endpoints: [ScreenOfferPayload.Endpoint] = []
-        var list: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&list) == 0 else { return [] }
-        defer { freeifaddrs(list) }
-        var cursor = list
-        while let entry = cursor?.pointee {
-            defer { cursor = entry.ifa_next }
-            let flags = Int32(entry.ifa_flags)
-            guard let sa = entry.ifa_addr, sa.pointee.sa_family == sa_family_t(AF_INET),
-                  flags & IFF_UP != 0, flags & IFF_RUNNING != 0, flags & IFF_LOOPBACK == 0,
-                  let link = links[String(cString: entry.ifa_name)]
-            else { continue }
-            let address = sa.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { ipv4String($0.pointee.sin_addr) }
-            endpoints.append(.init(address: address, link: link))
-        }
-        let order = RemoteScreen.linkPreference
-        return endpoints.sorted { order.firstIndex(of: $0.link)! < order.firstIndex(of: $1.link)! }
+        let links = NetworkLinks.byInterface()
+        return NetworkLinks.ipv4Interfaces()
+            .compactMap { interface in links[interface.name].map { (address: interface.address, link: $0) } }
+            .sorted { $0.link < $1.link }
+            .map { ScreenOfferPayload.Endpoint(address: $0.address, link: $0.link.rawValue) }
     }
 }

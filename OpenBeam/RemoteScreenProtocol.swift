@@ -22,8 +22,6 @@ enum RemoteScreen {
     static let bindTimeout: TimeInterval = 10
     static let keepaliveTimeout: TimeInterval = 3
     static let pixelFormatBGRA: UInt32 = 0x4247_5241  // "BGRA"
-    /// Which offered endpoint a viewer tries first, per `screen.offer`.
-    static let linkPreference = ["thunderbolt", "ethernet", "other", "wifi"]
 
     enum Channel: UInt8 {
         case video = 0x01

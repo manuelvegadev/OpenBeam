@@ -138,10 +138,7 @@ final class RemoteScreenViewer: @unchecked Sendable {
     // MARK: - Connecting
 
     private func run() {
-        let order = RemoteScreen.linkPreference
-        let endpoints = offer.endpoints.sorted {
-            (order.firstIndex(of: $0.link) ?? order.count) < (order.firstIndex(of: $1.link) ?? order.count)
-        }
+        let endpoints = offer.endpoints.sorted { NetworkLink(wire: $0.link) < NetworkLink(wire: $1.link) }
         var chosen: (endpoint: ScreenOfferPayload.Endpoint, video: Int32)?
         for endpoint in endpoints {
             if let fd = Self.connect(endpoint.address, offer.port) {

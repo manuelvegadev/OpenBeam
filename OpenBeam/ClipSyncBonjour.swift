@@ -20,6 +20,29 @@ import os
 
 private let log = Logger(subsystem: "com.openbeam.clipsync", category: "bonjour")
 
+/// A read source that runs `ref`'s callbacks on `queue`, keeping `holding`
+/// alive for them, and owns `ref` from here on: cancelling the source frees it.
+/// DNSServiceRefDeallocate closes the descriptor the source reads, and cancel()
+/// is asynchronous: freeing the ref alongside cancel() leaves the source live on
+/// a closed — and possibly already reused — fd. The cancel handler is the one
+/// point where the source is provably done. Nil, with `ref` freed, if it has no
+/// descriptor.
+private func dnsServiceSource(_ ref: DNSServiceRef, queue: DispatchQueue, holding: AnyObject? = nil) -> DispatchSourceRead? {
+    let fd = DNSServiceRefSockFD(ref)
+    guard fd >= 0 else {
+        DNSServiceRefDeallocate(ref)
+        return nil
+    }
+    let src = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
+    src.setEventHandler {
+        _ = holding
+        _ = DNSServiceProcessResult(ref)
+    }
+    src.setCancelHandler { DNSServiceRefDeallocate(ref) }
+    src.resume()
+    return src
+}
+
 /// One advertised service. Hold a reference to keep it published.
 final class BonjourPublisher: @unchecked Sendable {
 
@@ -99,14 +122,14 @@ final class BonjourPublisher: @unchecked Sendable {
         }
         // Hold onto the shared ref (it owns the socket); the per-service ref
         // was incremented by Register and is freed when we deallocate the shared one.
-        ref = sharedRef
-        attachDispatchSource(sharedRef, queue: queue)
+        source = dnsServiceSource(sharedRef, queue: queue)
+        ref = source == nil ? nil : sharedRef
         log.info("publisher: starting \(name, privacy: .public).\(type, privacy: .public) on port \(port, privacy: .public) (shared conn)")
     }
 
     func stop() {
         if let src = source {
-            // The cancel handler owns the deallocation; see attachDispatchSource.
+            // The cancel handler owns the deallocation; see dnsServiceSource.
             src.cancel()
             source = nil
             ref = nil
@@ -117,29 +140,12 @@ final class BonjourPublisher: @unchecked Sendable {
         }
     }
 
-    private func attachDispatchSource(_ ref: DNSServiceRef, queue: DispatchQueue) {
-        let fd = DNSServiceRefSockFD(ref)
-        guard fd >= 0 else {
-            DNSServiceRefDeallocate(ref)
-            self.ref = nil
-            return
-        }
-        let src = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
-        src.setEventHandler { _ = DNSServiceProcessResult(ref) }
-        // DNSServiceRefDeallocate closes the descriptor this source reads, and
-        // cancel() is asynchronous: freeing the ref alongside cancel() leaves
-        // the source live on a closed — and possibly already reused — fd. The
-        // cancel handler is the one point where the source is provably done.
-        src.setCancelHandler { DNSServiceRefDeallocate(ref) }
-        source = src
-        src.resume()
-    }
-
     deinit { stop() }
 }
 
 /// One running browser for a given service type. Emits resolved
-/// `(name, txt, host, port)` results as peers come/go.
+/// `(name, txt, host, port)` results as peers come/go — one per interface a
+/// peer is seen on, with its addresses there, so a caller can pick the link.
 final class BonjourBrowser: @unchecked Sendable {
 
     struct Result: Hashable {
@@ -147,6 +153,11 @@ final class BonjourBrowser: @unchecked Sendable {
         let host: String                    // hostname (e.g. "fedora.local.")
         let port: UInt16
         let txt: [String: String]
+        /// The interface it was seen on, by BSD name ("bridge0", "en0").
+        let interface: String
+        /// The host's addresses on that interface, as `NetworkLinks.string(of:)`
+        /// writes them; empty until looked up.
+        var addresses: [String] = []
     }
 
     /// Called when the resolved set changes. Argument is the *current* set.
@@ -156,11 +167,40 @@ final class BonjourBrowser: @unchecked Sendable {
     private var browseSource: DispatchSourceRead?
     private let queue: DispatchQueue
 
-    /// In-flight resolves keyed by service name. Each source's cancel handler
-    /// owns its DNSServiceRef, so cancelling is all it takes to tear one down.
-    private var resolves: [String: DispatchSourceRead] = [:]
-    /// Latest resolved entries keyed by service name.
-    private var resolved: [String: Result] = [:]
+    private struct Key: Hashable {
+        let name: String
+        let interfaceIndex: UInt32
+    }
+
+    /// One service on one interface: its resolve, which stays open, and the
+    /// address lookup for the host that resolve named. Each source's cancel
+    /// handler owns its DNSServiceRef, so cancelling is all it takes to tear
+    /// one down; the sources hold the entry their callbacks are handed.
+    private final class Entry {
+        let key: Key
+        let interface: String
+        weak var browser: BonjourBrowser?
+        var resolve: DispatchSourceRead?
+        var lookup: DispatchSourceRead?
+        var result: Result?
+        var addresses = Set<String>()
+
+        init(key: Key, browser: BonjourBrowser) {
+            self.key = key
+            self.browser = browser
+            interface = NetworkLinks.interfaceName(key.interfaceIndex) ?? ""
+        }
+
+        func cancel() {
+            resolve?.cancel()
+            lookup?.cancel()
+            resolve = nil
+            lookup = nil
+        }
+    }
+
+    private var entries: [Key: Entry] = [:]
+    private var published = Set<Result>()
 
     init(queue: DispatchQueue) { self.queue = queue }
 
@@ -178,10 +218,11 @@ final class BonjourBrowser: @unchecked Sendable {
                 let n = name.flatMap { String(cString: $0) } ?? ""
                 let t = regtype.flatMap { String(cString: $0) } ?? ""
                 let d = replyDomain.flatMap { String(cString: $0) } ?? ""
+                let key = Key(name: n, interfaceIndex: ifaceIdx)
                 if (flags & kDNSServiceFlagsAdd) != 0 {
-                    me.startResolve(name: n, type: t, domain: d, interfaceIndex: ifaceIdx)
+                    me.startResolve(key, type: t, domain: d)
                 } else {
-                    me.removeResolved(name: n)
+                    me.remove(key)
                 }
             }
             return DNSServiceBrowse(
@@ -193,18 +234,8 @@ final class BonjourBrowser: @unchecked Sendable {
             log.error("DNSServiceBrowse failed: \(err, privacy: .public)")
             return
         }
-        browseRef = ref
-        let fd = DNSServiceRefSockFD(ref)
-        if fd >= 0 {
-            let src = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
-            src.setEventHandler { _ = DNSServiceProcessResult(ref) }
-            src.setCancelHandler { DNSServiceRefDeallocate(ref) }
-            browseSource = src
-            src.resume()
-        } else {
-            DNSServiceRefDeallocate(ref)
-            browseRef = nil
-        }
+        browseSource = dnsServiceSource(ref, queue: queue)
+        browseRef = browseSource == nil ? nil : ref
         log.info("browser: started for \(type, privacy: .public)")
     }
 
@@ -217,22 +248,23 @@ final class BonjourBrowser: @unchecked Sendable {
             DNSServiceRefDeallocate(r)
             browseRef = nil
         }
-        for (_, src) in resolves { src.cancel() }
-        resolves.removeAll()
-        resolved.removeAll()
+        for entry in entries.values { entry.cancel() }
+        entries.removeAll()
+        published.removeAll()
         onChange?([])
     }
 
     // MARK: - Resolve
 
-    private func startResolve(name: String, type: String, domain: String, interfaceIndex: UInt32) {
-        // If we already have a resolve in flight for this name, leave it.
-        if resolves[name] != nil { return }
+    private func startResolve(_ key: Key, type: String, domain: String) {
+        // If we already have a resolve in flight for this name here, leave it.
+        if entries[key] != nil { return }
+        let entry = Entry(key: key, browser: self)
 
         var ref: DNSServiceRef?
         let cb: DNSServiceResolveReply = { _, _, _, errCode, fullname, hostTarget, port, txtLen, txtRecord, ctx in
             guard let ctx else { return }
-            let me = Unmanaged<BonjourBrowser>.fromOpaque(ctx).takeUnretainedValue()
+            let entry = Unmanaged<Entry>.fromOpaque(ctx).takeUnretainedValue()
             guard errCode == kDNSServiceErr_NoError else {
                 log.error("resolve callback err: \(errCode, privacy: .public)")
                 return
@@ -267,17 +299,17 @@ final class BonjourBrowser: @unchecked Sendable {
             // Service instance name is the leftmost label of `full`. dns_sd
             // gives us the full triplet; we want just the instance name.
             let instanceName = full.split(separator: ".").first.map(String.init) ?? full
-            let result = Result(name: instanceName, host: host, port: portHost, txt: txt)
-            me.queue.async { me.upsertResolved(result) }
+            let result = Result(name: instanceName, host: host, port: portHost, txt: txt, interface: entry.interface)
+            entry.browser?.resolved(result, for: entry)
         }
-        let err = name.withCString { namePtr in
+        let err = key.name.withCString { namePtr in
             type.withCString { typePtr in
                 domain.withCString { domainPtr in
                     DNSServiceResolve(
-                        &ref, 0, interfaceIndex,
+                        &ref, 0, key.interfaceIndex,
                         namePtr, typePtr, domainPtr,
                         cb,
-                        Unmanaged.passUnretained(self).toOpaque()
+                        Unmanaged.passUnretained(entry).toOpaque()
                     )
                 }
             }
@@ -286,31 +318,72 @@ final class BonjourBrowser: @unchecked Sendable {
             log.error("DNSServiceResolve failed: \(err, privacy: .public)")
             return
         }
-        let fd = DNSServiceRefSockFD(ref)
-        guard fd >= 0 else { DNSServiceRefDeallocate(ref); return }
-        let src = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
-        src.setEventHandler { _ = DNSServiceProcessResult(ref) }
-        src.setCancelHandler { DNSServiceRefDeallocate(ref) }
-        resolves[name] = src
-        src.resume()
+        guard let src = dnsServiceSource(ref, queue: queue, holding: entry) else { return }
+        entry.resolve = src
+        entries[key] = entry
     }
 
-    private func upsertResolved(_ r: Result) {
-        let prev = resolved[r.name]
-        resolved[r.name] = r
+    private func resolved(_ r: Result, for entry: Entry) {
         // The resolve stays open for as long as the service is there. A peer that
         // restarts comes back under the same name on a new port, and the browse
         // does not always report that as a remove and an add; only a live resolve
         // hears the new port. Tearing it down after the first answer left us
         // dialling the old port until this app restarted.
-        if prev != r { onChange?(Set(resolved.values)) }
+        let hostChanged = entry.result?.host != r.host
+        entry.result = r
+        if hostChanged { lookUpAddresses(of: r.host, for: entry) }
+        publish()
     }
 
-    private func removeResolved(name: String) {
-        resolves.removeValue(forKey: name)?.cancel()
-        if resolved.removeValue(forKey: name) != nil {
-            onChange?(Set(resolved.values))
+    // MARK: - Addresses
+
+    /// The host's addresses on the entry's interface only, followed for as long
+    /// as the entry lives: a link-local address changes when the peer restarts.
+    private func lookUpAddresses(of host: String, for entry: Entry) {
+        entry.lookup?.cancel()
+        entry.lookup = nil
+        entry.addresses.removeAll()
+
+        var ref: DNSServiceRef?
+        let cb: DNSServiceGetAddrInfoReply = { _, flags, _, errCode, _, address, _, ctx in
+            guard let ctx, errCode == kDNSServiceErr_NoError, let address else { return }
+            let entry = Unmanaged<Entry>.fromOpaque(ctx).takeUnretainedValue()
+            guard let text = NetworkLinks.string(of: address, interface: entry.interface) else { return }
+            if (flags & kDNSServiceFlagsAdd) != 0 {
+                entry.addresses.insert(text)
+            } else {
+                entry.addresses.remove(text)
+            }
+            // A host's addresses come in a burst; the set is passed on once it is in.
+            if (flags & kDNSServiceFlagsMoreComing) == 0 { entry.browser?.publish() }
         }
+        let err = host.withCString { hostPtr in
+            DNSServiceGetAddrInfo(&ref, 0, entry.key.interfaceIndex,
+                                  DNSServiceProtocol(kDNSServiceProtocol_IPv4 | kDNSServiceProtocol_IPv6),
+                                  hostPtr, cb, Unmanaged.passUnretained(entry).toOpaque())
+        }
+        guard err == kDNSServiceErr_NoError, let ref else {
+            log.error("DNSServiceGetAddrInfo failed: \(err, privacy: .public)")
+            return
+        }
+        entry.lookup = dnsServiceSource(ref, queue: queue, holding: entry)
+    }
+
+    private func remove(_ key: Key) {
+        guard let entry = entries.removeValue(forKey: key) else { return }
+        entry.cancel()
+        publish()
+    }
+
+    private func publish() {
+        let current = Set(entries.values.compactMap { entry -> Result? in
+            guard var r = entry.result else { return nil }
+            r.addresses = entry.addresses.sorted()
+            return r
+        })
+        guard current != published else { return }
+        published = current
+        onChange?(current)
     }
 
     deinit { stop() }

@@ -69,7 +69,12 @@ final class ClipSyncManager: NSObject, @unchecked Sendable {
         var outbox: [String: [Data]] = [:]
         /// Failed dials in a row per peer while payloads wait; bounds the retries.
         var dialFailures: [String: Int] = [:]
+        /// When a session was last moved to a better link, per peer.
+        var linkMoves: [String: Date] = [:]
     }
+
+    /// Checks every few seconds that each session runs over the best link.
+    private var linkCheck: DispatchSourceTimer?
 
     // MARK: - Init
 
@@ -99,6 +104,7 @@ final class ClipSyncManager: NSObject, @unchecked Sendable {
         self.discovery.onPeersChanged = { [weak self] peers in
             guard let self else { return }
             self.lock.withLock { $0.discoveredPeers = peers }
+            self.ioQueue.async { self.moveSessionsToBestLinks() }
             DispatchQueue.main.async { self.onStateChanged?() }
         }
         self.discovery.onIncomingConnection = { [weak self] nwc in
@@ -111,6 +117,11 @@ final class ClipSyncManager: NSObject, @unchecked Sendable {
     func start() {
         discovery.start()
         clipboard.start()
+        let timer = DispatchSource.makeTimerSource(queue: ioQueue)
+        timer.schedule(deadline: .now() + 5, repeating: 5)
+        timer.setEventHandler { [weak self] in self?.moveSessionsToBestLinks() }
+        timer.resume()
+        linkCheck = timer
         // Once discovery surfaces a paired peer, dial it lazily on first outbound.
         // The toggle is whatever the user last set it to; a machine that has
         // never been asked starts on as soon as it has someone to sync with.
@@ -120,6 +131,8 @@ final class ClipSyncManager: NSObject, @unchecked Sendable {
     func stop() {
         discovery.stop()
         clipboard.stop()
+        linkCheck?.cancel()
+        linkCheck = nil
 
         let (sessions, pairing) = lock.withLock { (s: inout State) -> ([ClipSyncConnection], [ClipSyncConnection]) in
             let a = Array(s.sessions.values)
@@ -188,8 +201,13 @@ final class ClipSyncManager: NSObject, @unchecked Sendable {
     }
 
     private func openSessionIfNeeded(for peer: PairedPeer) {
-        let existing: ClipSyncConnection? = lock.withLock { $0.sessions[peer.peerID] }
-        if existing != nil { return }
+        guard lock.withLock({ $0.sessions[peer.peerID] }) == nil else { return }
+        openSession(for: peer)
+    }
+
+    /// Dials `peer`. A session already open with it is replaced by this one
+    /// once its handshake is done.
+    private func openSession(for peer: PairedPeer) {
         // Find a discovered endpoint for this peer.
         guard let discovered = (lock.withLock { $0.discoveredPeers }.first { $0.peerID == peer.peerID }),
               let endpoint = ClipSyncDiscovery.endpoint(of: discovered) else {
@@ -206,6 +224,39 @@ final class ClipSyncManager: NSObject, @unchecked Sendable {
         }
         guard claimed else { return }
         conn.start()
+    }
+
+    /// Moves each session onto the best link its peer is seen on: onto the
+    /// Thunderbolt cable once it comes up, and off it when it goes. A new
+    /// session is opened over the better link and replaces the old one at its
+    /// handshake, as any newer session does. Only the side with the smaller
+    /// peerID moves, so the two never dial each other at once and cancel both
+    /// sessions; and not while frames are still leaving, or a transfer is
+    /// arriving, over the old one.
+    private func moveSessionsToBestLinks() {
+        let (sessions, discovered) = lock.withLock { ($0.sessions, $0.discoveredPeers) }
+        let candidates = sessions.compactMap { peerID, session -> (DiscoveredPeer, ClipSyncConnection, String)? in
+            guard identity.peerID < peerID, let peer = discovered.first(where: { $0.peerID == peerID }),
+                  let interface = session.interfaceName
+            else { return nil }
+            return (peer, session, interface)
+        }
+        guard !candidates.isEmpty else { return }
+        let links = NetworkLinks.byInterface()
+        for (peer, session, interface) in candidates {
+            let peerID = peer.peerID
+            let current = links[interface, default: .other]
+            guard current != peer.link, !session.isBusy, let paired = identity.paired(peerID: peerID) else { continue }
+            let due: Bool = lock.withLock { state in
+                // A dial over the better link that fails is tried again in a while, not at every check.
+                guard (state.linkMoves[peerID]?.timeIntervalSinceNow ?? -.infinity) < -30 else { return false }
+                state.linkMoves[peerID] = Date()
+                return true
+            }
+            guard due else { continue }
+            mgrLog.info("moving session with peer=\(peerID, privacy: .public) from \(current.rawValue, privacy: .public) (\(interface, privacy: .public)) to \(peer.link.rawValue, privacy: .public)")
+            openSession(for: paired)
+        }
     }
 
     /// TCP that gives up on a connect after 5 s. The default waits over a minute
@@ -273,6 +324,7 @@ extension ClipSyncManager: ClipSyncConnectionDelegate {
                 return prev
             }
             oldSession?.cancel()
+            mgrLog.info("session with peer=\(peerHello.peerID, privacy: .public) over \(c.interfaceName ?? "?", privacy: .public)")
 
             let queued: [Data] = lock.withLock { $0.outbox.removeValue(forKey: peerHello.peerID) ?? [] }
             for payload in queued { c.sendEncrypted(payload: payload) }
