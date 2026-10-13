@@ -8,12 +8,15 @@
 import Foundation
 import CoreVideo
 import AVFoundation
+import SystemConfiguration
 import os
 
 final class NDISender: @unchecked Sendable {
 
     static let sourceName: String = {
-        if let localized = Host.current().localizedName, !localized.isEmpty {
+        // The Sharing pane's computer name, read locally: Host.current() can
+        // wait seconds on name lookups.
+        if let localized = SCDynamicStoreCopyComputerName(nil, nil) as String?, !localized.isEmpty {
             return localized
         }
         let hostName = ProcessInfo.processInfo.hostName
@@ -39,12 +42,13 @@ final class NDISender: @unchecked Sendable {
     // inside NDIlib_send_send_video_v2 for 5-9 ms of every 33 ms frame at
     // 1080p30 — a sync hop onto it stalled them on roughly one frame in four.
     //
-    // It does not extend the handle's lifetime: a reader that takes the pointer
-    // immediately before stop() can still hand it to libndi afterwards, exactly
-    // as the queue hop it replaces could. Closing that window means giving the
-    // handle a single owner across start, stop and both send paths, which is a
-    // change worth making on its own rather than smuggling in here.
+    // An audio send joins `audioSends` in the same lock it reads the handle
+    // under, and stop() waits for the group before destroying: an audio send
+    // can sit inside libndi behind a 5-9 ms video send, and destroying the
+    // instance under it crashed. The lock is never held across a libndi call,
+    // so the capture thread's isActive stays cheap.
     private let liveInstance = OSAllocatedUnfairLock<NDIlib_send_instance_t?>(initialState: nil)
+    private let audioSends = DispatchGroup()
 
     var isActive: Bool { liveInstance.withLock { $0 != nil } }
 
@@ -153,7 +157,12 @@ final class NDISender: @unchecked Sendable {
     /// Audio already gathered into one planar block — the monitor mix, which
     /// is assembled in its own storage before it goes out.
     func send(planar audio: PlanarAudio) {
-        guard let instance = liveInstance.withLock({ $0 }) else { return }
+        let instance: NDIlib_send_instance_t? = liveInstance.withLock {
+            if $0 != nil { audioSends.enter() }
+            return $0
+        }
+        guard let instance else { return }
+        defer { audioSends.leave() }
 
         var frame = NDIlib_audio_frame_v2_t()
         frame.sample_rate = Int32(audio.sampleRate)
@@ -181,8 +190,10 @@ final class NDISender: @unchecked Sendable {
     }
 
     func stop() {
-        // Cleared before the teardown so no further frames are handed in.
+        // Cleared before the teardown so no further frames are handed in,
+        // then any audio send already inside libndi is let finish.
         liveInstance.withLock { $0 = nil }
+        audioSends.wait()
         queue.sync {
             if let instance = ndiInstance {
                 NDIlib_send_send_video_v2(instance, nil)

@@ -405,6 +405,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ndiFinder.stop()
         clipSyncManager.stop()
         netMonitor.stop()
+        // AppKit calls exit() as soon as this returns: the receive and find
+        // loops stop on their own threads, a capture timeout later.
+        NDIRuntime.waitUntilUnused(timeout: 1)
     }
 
     // MARK: - Status Bar Menu

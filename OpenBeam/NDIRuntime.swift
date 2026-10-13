@@ -32,6 +32,14 @@ enum NDIRuntime {
         }
     }
 
+    /// Blocks until every user has let go, or `timeout` passes. For quitting:
+    /// stop() only asks the receive and find loops to end, and exit() tearing
+    /// libndi down under a thread still inside it crashed.
+    static func waitUntilUnused(timeout: TimeInterval) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while users.withLock({ $0 }) > 0, Date() < deadline { usleep(5_000) }
+    }
+
     static func release() {
         users.withLock { count in
             guard count > 0 else { return }
