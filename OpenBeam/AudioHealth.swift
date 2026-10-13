@@ -103,9 +103,12 @@ final class AudioHealth: @unchecked Sendable {
     /// to the same question.
     func received(frames: Int, sampleRate: Double, channels: Int) {
         guard frames > 0, sampleRate > 0 else { return }
-        let now = DispatchTime.now().uptimeNanoseconds
 
         state.withLock { state in
+            // Read under the lock, as in ranDry(): a clock read before it can
+            // be older than a lastArrival stored in between, and `now - last`
+            // on UInt64 would then trap.
+            let now = DispatchTime.now().uptimeNanoseconds
             rotate(&state, now: now)
 
             if let last = state.lastArrival.nonZero {
@@ -141,8 +144,8 @@ final class AudioHealth: @unchecked Sendable {
     /// idle, so a machine whose meeting is between sentences sends nothing,
     /// and counting that would be counting the quiet.
     func ranDry() {
-        let now = DispatchTime.now().uptimeNanoseconds
         state.withLock { state in
+            let now = DispatchTime.now().uptimeNanoseconds
             rotate(&state, now: now)
             guard let last = state.lastArrival.nonZero,
                   Double(now - last) / 1_000_000_000 < 0.5

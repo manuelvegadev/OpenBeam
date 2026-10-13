@@ -16,6 +16,10 @@ import os
 final class AudioController: NSObject, @unchecked Sendable {
 
     private var engine: AVAudioEngine?
+    private var configurationObserver: NSObjectProtocol?
+    /// The engine a restart is still being tried for; cleared by stop(), so a
+    /// controller the app has stopped or restarted is left alone.
+    private var pendingRestart: AVAudioEngine?
     private(set) var currentDeviceID: String?
 
     /// Called on the I/O thread once per cycle, with the list the device just
@@ -78,8 +82,8 @@ final class AudioController: NSObject, @unchecked Sendable {
         }
 
         let format = input.outputFormat(forBus: 0)
-        guard format.channelCount > 0 else {
-            print("[OpenBeam] Input format reports 0 channels — engine will not deliver audio")
+        guard format.channelCount > 0, format.sampleRate > 0 else {
+            print("[OpenBeam] Input format reports 0 channels or 0 Hz — engine will not deliver audio")
             return
         }
 
@@ -109,13 +113,49 @@ final class AudioController: NSObject, @unchecked Sendable {
             try engine.start()
             self.engine = engine
             self.currentDeviceID = device.uniqueID
+            // The engine stops itself when the device changes shape — its rate
+            // reset under it, as MicrophoneRate does — and stayed silent after.
+            // Built again once the device has settled, if it is still ours.
+            configurationObserver = NotificationCenter.default.addObserver(
+                forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
+            ) { [weak self] _ in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    guard let self, self.engine === engine, !engine.isRunning else { return }
+                    print("[OpenBeam] Audio input changed configuration — restarting")
+                    self.restart(engine, deviceID: deviceID, attempt: 1)
+                }
+            }
             print("[OpenBeam] Audio started: \(device.localizedName) — \(Int(format.sampleRate)) Hz, \(format.channelCount) ch")
         } catch {
             print("[OpenBeam] AVAudioEngine start failed: \(error)")
         }
     }
 
+    /// Builds the engine again on the same device. Never falls back to the
+    /// default input: that can be the call's microphone, and one more reader of
+    /// it is what breaks its audio. A device still settling gets a few tries.
+    private func restart(_ stopped: AVAudioEngine, deviceID: String?, attempt: Int) {
+        if let deviceID, AVCaptureDevice(uniqueID: deviceID) == nil {
+            print("[OpenBeam] Audio input went away — not restarting")
+            return
+        }
+        start(deviceID: deviceID)
+        guard engine == nil, attempt < 5 else { return }
+        // start() failed. Owed a retry unless something stops or restarts
+        // this controller first: both go through stop(), which clears this.
+        pendingRestart = stopped
+        DispatchQueue.main.asyncAfter(deadline: .now() + Double(attempt)) { [weak self] in
+            guard let self, self.pendingRestart === stopped else { return }
+            self.restart(stopped, deviceID: deviceID, attempt: attempt + 1)
+        }
+    }
+
     func stop() {
+        pendingRestart = nil
+        if let configurationObserver {
+            NotificationCenter.default.removeObserver(configurationObserver)
+            self.configurationObserver = nil
+        }
         engine?.stop()
         engine = nil
         currentDeviceID = nil

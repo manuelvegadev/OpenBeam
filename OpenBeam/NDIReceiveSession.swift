@@ -114,7 +114,10 @@ extension PlanarAudio {
     init?(_ frame: NDIlib_audio_frame_v3_t) {
         guard frame.FourCC == NDIlib_FourCC_audio_type_FLTP,
               let data = frame.p_data,
-              frame.no_samples > 0, frame.no_channels > 0, frame.sample_rate > 0
+              frame.no_samples > 0, (1...64).contains(frame.no_channels),
+              // A second of storage is allocated per rate further down, so a
+              // sender claiming billions of Hz would ask for gigabytes.
+              (8_000...384_000).contains(frame.sample_rate)
         else { return nil }
 
         let stride = Int(frame.channel_stride_in_bytes) / MemoryLayout<Float>.size

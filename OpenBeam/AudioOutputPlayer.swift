@@ -125,8 +125,14 @@ final class AudioOutputPlayer: @unchecked Sendable {
             return
         }
 
-        guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate,
-                                         channels: AVAudioChannelCount(channels)) else {
+        // Past two channels the plain initializer returns nil — it will not
+        // guess a layout — and a 4-channel source never played, retrying every
+        // second. Discrete channels in order is what an NDI block is.
+        let format = channels > 2
+            ? AVAudioChannelLayout(layoutTag: kAudioChannelLayoutTag_DiscreteInOrder | UInt32(channels))
+                .map { AVAudioFormat(standardFormatWithSampleRate: sampleRate, channelLayout: $0) }
+            : AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: AVAudioChannelCount(channels))
+        guard let format else {
             retryLater()
             return
         }
@@ -146,6 +152,18 @@ final class AudioOutputPlayer: @unchecked Sendable {
                 return
             }
             AudioDevices.setDevice(device.id, on: unit)
+        }
+
+        // Touching `mainMixerNode` below connects it to the output in the
+        // hardware's format, and AVAudioEngine raises an exception — a crash —
+        // if that format is 0 Hz or 0 channels, which is what a device reports
+        // for a moment while it changes shape (AirPods switching profile, a
+        // display's audio going away on sleep).
+        let hardware = engine.outputNode.outputFormat(forBus: 0)
+        guard hardware.sampleRate > 0, hardware.channelCount > 0 else {
+            print("[OpenBeam] playback: the output reports no usable format yet")
+            retryLater()
+            return
         }
 
         // A rebuild mid-stream is a gap of its own, however short. The
@@ -318,7 +336,7 @@ final class RingBuffer: @unchecked Sendable {
         target = Int(sampleRate * Self.initialLatency)
         ceiling = max(Int(sampleRate * Self.ceilingLatency), target)
         state = OSAllocatedUnfairLock(initialState: (written: 0, read: 0, target: target))
-        capacity = max(Int(sampleRate), ceiling * 3 * 2)
+        capacity = max(Int(sampleRate), ceiling * 3 * 2, 1)  // never 0: positions wrap with `%`
         storage = UnsafeMutablePointer<Float>.allocate(capacity: self.capacity * self.channels)
         storage.initialize(repeating: 0, count: self.capacity * self.channels)
     }

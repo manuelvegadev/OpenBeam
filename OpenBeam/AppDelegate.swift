@@ -2173,8 +2173,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !isMonitoring, monitoredAudio == .exclusive,
            !UserDefaults.standard.bool(forKey: Self.exclusiveMonitorWarningKey) {
             // Asked outside the menu: an alert cannot run while it tracks.
+            // From the run loop, not a main-queue block, which the modal would
+            // hold shut until it is dismissed.
             statusItem.menu?.cancelTracking()
-            DispatchQueue.main.async { self.confirmExclusiveMonitor() }
+            RunLoop.main.perform { self.confirmExclusiveMonitor() }
             return
         }
         setMonitoring(!isMonitoring)
