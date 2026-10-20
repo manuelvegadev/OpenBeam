@@ -32,6 +32,9 @@ final class RemoteScreenHost: @unchecked Sendable {
         case displayLost = "display_lost"
         case error
         case other
+        /// The host got a Thunderbolt address it had not offered: asking again
+        /// gets an offer with it. A viewer that does not know it reads `other`.
+        case betterLink = "better_link"
 
         /// Ended on purpose on the host's side: a viewer should not try to come back.
         var isFinal: Bool { self == .user || self == .revoked }
@@ -248,16 +251,16 @@ final class RemoteScreenHost: @unchecked Sendable {
         }
         lastActivityNs = monotonicNs()
         let fd = videoFD
+        let link = link(ofLocalAddressOf: fd)
         // Registered under the lock end() sets `ended` under, so its removal
         // always comes after: a display callback left registered would call
         // into this host after it is freed.
-        startWatchdog()
+        startWatchdog(viewerLink: link)
         CGDisplayRegisterReconfigurationCallback(Self.displaysReconfigured, Unmanaged.passUnretained(self).toOpaque())
         cond.unlock()
         // Raw pixels are for Thunderbolt. A viewer that reached us some other way
         // (the cable came out, and it reconnected over Ethernet or Wi-Fi) gets
         // half the size at no more than 60 fps, which those links can carry.
-        let link = link(ofLocalAddressOf: fd)
         if link != .thunderbolt {
             minFrameIntervalNs = max(minFrameIntervalNs, 1_000_000_000 / 60)
             hostLog.info("viewer is on \(link.rawValue, privacy: .public): half size, 60 fps at most")
@@ -650,9 +653,16 @@ final class RemoteScreenHost: @unchecked Sendable {
     }
 
     /// Ends a session whose viewer went silent, and logs throughput every few seconds.
-    private func startWatchdog() {
+    /// A viewer off Thunderbolt is also sent back to ask again once this Mac has
+    /// a Thunderbolt address it did not offer: a session that came up while the
+    /// cable was out offered none, so the viewer has nothing better to probe for,
+    /// and the bridge's IPv4 address can take some 20 s to come back after the cable.
+    private func startWatchdog(viewerLink: NetworkLink) {
         let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
         var ticks = 0
+        // Which interfaces are Thunderbolt does not change with the cable, so the
+        // SystemConfiguration walk (some 2 ms) happens once, not every check.
+        lazy var thunderbolt = Set(NetworkLinks.byInterface().filter { $0.value == .thunderbolt }.keys)
         timer.schedule(deadline: .now() + 0.5, repeating: 0.5)
         timer.setEventHandler { [weak self] in
             guard let self else { return }
@@ -668,6 +678,12 @@ final class RemoteScreenHost: @unchecked Sendable {
             if Double(silentNs) / 1e9 > RemoteScreen.keepaliveTimeout {
                 hostLog.error("viewer silent for \(Double(silentNs) / 1e9, format: .fixed(precision: 1), privacy: .public) s")
                 self.end(.error)
+            } else if viewerLink != .thunderbolt, ticks % 4 == 0,
+                      let new = NetworkLinks.ipv4Interfaces().first(where: { interface in
+                          thunderbolt.contains(interface.name) && !self.endpoints.contains { $0.address == interface.address }
+                      }) {
+                hostLog.info("thunderbolt \(new.address, privacy: .public) is up; sending the viewer to ask again")
+                self.end(.betterLink)
             }
         }
         timer.resume()

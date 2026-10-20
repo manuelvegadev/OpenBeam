@@ -156,13 +156,14 @@ A viewer whose session ended for any reason but a deliberate one (`screen.stop` 
 {
   "kind": "screen.stop",
   "sessionID": "<base64 16 B>",
-  "reason": "user" | "revoked" | "display_lost" | "error" | "other",
+  "reason": "user" | "revoked" | "display_lost" | "error" | "other" | "better_link",
   "originID": "<sender peerID>"
 }
 ```
 
 - `revoked`: the host's user turned off the permission, or unpaired the viewer, mid-session.
 - `display_lost`: the captured display went away (unplugged, or the host went to sleep).
+- `better_link`: the viewer is on a link other than Thunderbolt, and the host now has a Thunderbolt address that its offer did not list — typically a session that reconnected while the cable was out. The viewer asks again, as after any non-deliberate ending, and the new offer lists it. A viewer that does not know the reason treats it as `other`, which leads to the same.
 
 A session also ends, without any message, when either data connection closes. It does **not** end when the ClipSync session that set it up closes: ClipSync replaces connections as peers reconnect or change networks, and the data connections' own keepalive already tells whether the other side is there. Control messages for a running session travel on whatever ClipSync session is current. On any ending, the host releases every key and button the viewer held down (see `RELEASE_ALL`), closes both data connections and forgets `sessionID` and `key`.
 

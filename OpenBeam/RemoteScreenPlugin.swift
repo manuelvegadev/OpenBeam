@@ -472,7 +472,7 @@ final class RemoteScreenPlugin: @unchecked Sendable {
         case .user: return "It was stopped on the other Mac."
         case .revoked: return "The other Mac no longer allows control from this one."
         case .displayLost: return "The other Mac's display went away — it may have gone to sleep."
-        case .error, .other: return "The connection ended."
+        case .error, .other, .betterLink: return "The connection ended."
         }
     }
 
