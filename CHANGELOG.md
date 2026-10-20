@@ -11,6 +11,18 @@ deciding whether to take the update — not assembled from commit subjects.
 
 ## [Unreleased]
 
+## [2.10.1] - 2026-10-20
+
+### Fixed
+
+- **Remote screen goes back to the cable after it comes loose.** If the Thunderbolt cable
+  dropped out for a moment, the session reconnected over Wi-Fi and stayed there, at half
+  size and 60 fps, after the cable was back. It now returns to Thunderbolt by itself once
+  the other Mac has its cable address again, which macOS can take some 20 seconds to give.
+- **Remote screen keeps going when the cable comes out.** The picture used to disappear for
+  up to 25 seconds before carrying on over the network; it is now back in about 4. Both
+  Macs need this version for it.
+
 ## [2.10.0] - 2026-10-12
 
 ### Added
@@ -453,7 +465,8 @@ captures a microphone raw, with no echo canceller of its own.
   as an NDI source on the local network, with a live preview, camera selection, macOS camera
   effects and statistics.
 
-[Unreleased]: https://github.com/manuelvegadev/OpenBeam/compare/v2.10.0...HEAD
+[Unreleased]: https://github.com/manuelvegadev/OpenBeam/compare/v2.10.1...HEAD
+[2.10.1]: https://github.com/manuelvegadev/OpenBeam/compare/v2.10.0...v2.10.1
 [2.10.0]: https://github.com/manuelvegadev/OpenBeam/compare/v2.9.0...v2.10.0
 [2.9.0]: https://github.com/manuelvegadev/OpenBeam/compare/v2.8.2...v2.9.0
 [2.8.2]: https://github.com/manuelvegadev/OpenBeam/compare/v2.8.1...v2.8.2
