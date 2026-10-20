@@ -99,6 +99,9 @@ final class ClipSyncManager: NSObject, @unchecked Sendable {
         self.remoteScreen.send = { [weak self] payload, peerID in
             self?.send(payloadData: payload, to: peerID) ?? false
         }
+        self.remoteScreen.peerAddress = { [weak self] peerID in
+            self?.lock.withLock { $0.sessions[peerID] }?.remoteLinkLocalAddress
+        }
 
         // Wire discovery callbacks.
         self.discovery.onPeersChanged = { [weak self] peers in

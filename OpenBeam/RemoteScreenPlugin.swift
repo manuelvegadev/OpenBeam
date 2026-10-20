@@ -93,6 +93,8 @@ final class RemoteScreenPlugin: @unchecked Sendable {
     /// Sends a control payload to one paired peer, opening a ClipSync session
     /// if there is none; false when the peer cannot be reached at all.
     var send: ((Data, String) -> Bool)?
+    /// The IPv6 link-local address this Mac's ClipSync session reaches a peer at, if any.
+    var peerAddress: ((String) -> String?)?
 
     private let identity: ClipSyncIdentity
 
@@ -212,7 +214,8 @@ final class RemoteScreenPlugin: @unchecked Sendable {
             window = made
         }
         guard let window, let device = MTLCreateSystemDefaultDevice(),
-              let viewer = RemoteScreenViewer(offer: offer, device: device), window.attach(viewer)
+              let viewer = RemoteScreenViewer(offer: offer, device: device, peerAddress: peerAddress?(peerID)),
+              window.attach(viewer)
         else {
             entry.window = window
             viewing[peerID] = entry

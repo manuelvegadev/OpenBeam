@@ -128,6 +128,17 @@ final class ClipSyncConnection: @unchecked Sendable {
         return interface.name
     }
 
+    /// The peer's IPv6 link-local address as this connection reaches it, with
+    /// the interface ("fe80::1%en7"): a dial to it leaves by that same interface.
+    var remoteLinkLocalAddress: String? {
+        guard case .hostPort(.ipv6(let address), _)? = connection.currentPath?.remoteEndpoint,
+              address.isLinkLocal, let interface = address.interface
+        else { return nil }
+        var text = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
+        guard address.rawValue.withUnsafeBytes({ inet_ntop(AF_INET6, $0.baseAddress, &text, socklen_t(text.count)) }) != nil else { return nil }
+        return "\(String(cString: text))%\(interface.name)"
+    }
+
     /// Through close(), so the delegate hears of it: a connection cancelled
     /// without a word stayed in the manager's pairing and dialing tables, and a
     /// peer left in `dialing` was never dialled again.

@@ -53,6 +53,13 @@ enum NetworkLinks {
         return links
     }
 
+    /// The link kind of the interface a scoped address names ("fe80::1%en7"),
+    /// or nil when it names none.
+    static func link(ofScoped address: String) -> NetworkLink? {
+        guard let interface = address.split(separator: "%").dropFirst().first else { return nil }
+        return byInterface()[String(interface), default: .other]
+    }
+
     /// This Mac's IPv4 addresses on interfaces that are up and running: the
     /// ones another Mac can reach it at. The Thunderbolt ports that only carry
     /// the bridge have none.

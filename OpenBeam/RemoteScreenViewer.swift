@@ -38,6 +38,8 @@ final class RemoteScreenViewer: @unchecked Sendable {
     let stats = RemoteScreenStats()
 
     private let keys: ScreenSessionKeys
+    /// The address ClipSync reaches the host at, tried alongside the offer.
+    private let peerAddress: String?
     private let inputQueue = DispatchQueue(label: "com.openbeam.remotescreen.input", qos: .userInteractive)
     private let lock = NSLock()
     private var videoFD: Int32 = -1
@@ -51,10 +53,11 @@ final class RemoteScreenViewer: @unchecked Sendable {
     private var clockSamples: [(rtt: UInt64, offset: Int64)] = []
     private var clock: (rtt: UInt64, offset: Int64) = (0, 0)
 
-    init?(offer: ScreenOfferPayload, device: MTLDevice) {
+    init?(offer: ScreenOfferPayload, device: MTLDevice, peerAddress: String? = nil) {
         guard offer.sessionID.count == 16, offer.key.count == 32, let canvas = ScreenCanvas(device: device) else { return nil }
         self.offer = offer
         self.canvas = canvas
+        self.peerAddress = peerAddress
         keys = ScreenSessionKeys(key: SymmetricKey(data: offer.key), sessionID: offer.sessionID)
     }
 
@@ -138,7 +141,12 @@ final class RemoteScreenViewer: @unchecked Sendable {
     // MARK: - Connecting
 
     private func run() {
-        let endpoints = offer.endpoints.sorted { NetworkLink(wire: $0.link) < NetworkLink(wire: $1.link) }
+        var endpoints = offer.endpoints.sorted { NetworkLink(wire: $0.link) < NetworkLink(wire: $1.link) }
+        // After the offered addresses of its kind: they are what the session was set up for.
+        if let local = linkLocalEndpoint() {
+            let link = NetworkLink(wire: local.link)
+            endpoints.insert(local, at: endpoints.firstIndex { NetworkLink(wire: $0.link) > link } ?? endpoints.endIndex)
+        }
         var chosen: (endpoint: ScreenOfferPayload.Endpoint, video: Int32)?
         for endpoint in endpoints {
             if let fd = Self.connect(endpoint.address, offer.port) {
@@ -179,6 +187,16 @@ final class RemoteScreenViewer: @unchecked Sendable {
         receiveVideo(video)
     }
 
+    /// The host's IPv6 link-local address as ClipSync reaches it, ranked by this
+    /// Mac's interface. The offer's IPv4 addresses need ARP, and a failed lookup
+    /// keeps a host unreachable for 20 s (net.link.ether.inet.host_down_time):
+    /// right after the cable comes out, Wi-Fi took that long. Link-local is up
+    /// as soon as the interface is, and ClipSync has just proved it answers.
+    private func linkLocalEndpoint() -> ScreenOfferPayload.Endpoint? {
+        guard let peerAddress, let link = NetworkLinks.link(ofScoped: peerAddress) else { return nil }
+        return ScreenOfferPayload.Endpoint(address: peerAddress, link: link.rawValue)
+    }
+
     /// A link that was not up yet when the session started — the Thunderbolt
     /// bridge takes a while after boot — leaves it on Wi-Fi for good otherwise.
     /// Asked every few seconds whether the better address answers; once it
@@ -210,8 +228,12 @@ final class RemoteScreenViewer: @unchecked Sendable {
 
     /// Opens a TCP connection within 1 s, or gives up.
     private static func connect(_ address: String, _ port: UInt16) -> Int32? {
-        guard let (fd, error) = dial(address, port, timeoutMs: 1000) else { return nil }
+        guard let (fd, error) = dial(address, port, timeoutMs: 1000) else {
+            viewerLog.info("connect \(address, privacy: .public):\(port, privacy: .public): no answer within 1 s")
+            return nil
+        }
         guard error == 0 else {
+            viewerLog.info("connect \(address, privacy: .public):\(port, privacy: .public): \(String(cString: strerror(error)), privacy: .public) (errno \(error, privacy: .public))")
             close(fd)
             return nil
         }
@@ -223,22 +245,19 @@ final class RemoteScreenViewer: @unchecked Sendable {
 
     /// A connect waited on for up to `timeoutMs`: the blocking socket and how
     /// the attempt ended (0 once connected), or nil when nothing answered.
+    /// `address` is IPv4, or IPv6 with its interface when link-local ("fe80::1%en7").
     private static func dial(_ address: String, _ port: UInt16, timeoutMs: Int32) -> (fd: Int32, error: Int32)? {
-        let fd = socket(AF_INET, SOCK_STREAM, 0)
-        var addr = sockaddr_in()
-        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-        addr.sin_family = sa_family_t(AF_INET)
-        addr.sin_port = port.bigEndian
-        guard inet_pton(AF_INET, address, &addr.sin_addr) == 1 else {
-            close(fd)
-            return nil
-        }
+        var hints = addrinfo()
+        hints.ai_flags = AI_NUMERICHOST | AI_NUMERICSERV
+        hints.ai_socktype = SOCK_STREAM
+        var info: UnsafeMutablePointer<addrinfo>?
+        guard getaddrinfo(address, String(port), &hints, &info) == 0, let target = info?.pointee else { return nil }
+        defer { freeaddrinfo(info) }
+        let fd = socket(target.ai_family, SOCK_STREAM, 0)
+        guard fd >= 0 else { return nil }
         let flags = fcntl(fd, F_GETFL)
         _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
-        let rc = withUnsafePointer(to: &addr) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
-        }
-        if rc != 0, errno != EINPROGRESS { return (fd, errno) }
+        if Darwin.connect(fd, target.ai_addr, target.ai_addrlen) != 0, errno != EINPROGRESS { return (fd, errno) }
         var pfd = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
         var error: Int32 = 0
         var length = socklen_t(MemoryLayout<Int32>.size)

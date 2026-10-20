@@ -120,11 +120,14 @@ final class RemoteScreenHost: @unchecked Sendable {
         sessionID = SymmetricKey(size: .bits128).withUnsafeBytes { Data($0) }
         keys = ScreenSessionKeys(key: key, sessionID: sessionID)
 
-        let fd = socket(AF_INET, SOCK_STREAM, 0)
-        var addr = sockaddr_in()
-        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-        addr.sin_family = sa_family_t(AF_INET)
-        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        // Dual-stack: the offer's IPv4 addresses, and the IPv6 link-local one a
+        // viewer may reach this Mac at through ClipSync's session.
+        let fd = socket(AF_INET6, SOCK_STREAM, 0)
+        setSocketOption(fd, IPPROTO_IPV6, IPV6_V6ONLY, 0)
+        var addr = sockaddr_in6()
+        addr.sin6_len = UInt8(MemoryLayout<sockaddr_in6>.size)
+        addr.sin6_family = sa_family_t(AF_INET6)
+        var length = socklen_t(MemoryLayout<sockaddr_in6>.size)
         let bound = withUnsafeMutablePointer(to: &addr) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
                 bind(fd, $0, length) == 0 && listen(fd, 4) == 0 && getsockname(fd, $0, &length) == 0
@@ -135,7 +138,7 @@ final class RemoteScreenHost: @unchecked Sendable {
             close(fd)
             throw RemoteScreenError.io("listen", code)
         }
-        let port = UInt16(bigEndian: addr.sin_port)
+        let port = UInt16(bigEndian: addr.sin6_port)
         let endpoints = RemoteScreenEndpoints.current()
         guard !endpoints.isEmpty else {
             close(fd)
@@ -422,14 +425,20 @@ final class RemoteScreenHost: @unchecked Sendable {
 
     /// Which of the offered links a connected socket arrived on.
     private func link(ofLocalAddressOf fd: Int32) -> NetworkLink {
-        var addr = sockaddr_in()
-        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
-        let ok = withUnsafeMutablePointer(to: &addr) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &length) == 0 }
+        var addr = sockaddr_storage()
+        var length = socklen_t(MemoryLayout<sockaddr_storage>.size)
+        let local = withUnsafeMutablePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                getsockname(fd, $0, &length) == 0 ? NetworkLinks.string(of: $0) : nil
+            }
         }
-        guard ok else { return .other }
-        let address = ipv4String(addr.sin_addr)
-        return NetworkLink(wire: endpoints.first { $0.address == address }?.link ?? "")
+        guard let local else { return .other }
+        // The listener is dual-stack, so an IPv4 viewer shows up as "::ffff:a.b.c.d".
+        let mapped = "::ffff:"
+        let address = local.hasPrefix(mapped) ? String(local.dropFirst(mapped.count)) : local
+        if let offered = endpoints.first(where: { $0.address == address }) { return NetworkLink(wire: offered.link) }
+        // IPv6 link-local, which the offer does not list: the interface it is scoped to.
+        return NetworkLinks.link(ofScoped: address) ?? .other
     }
 
     /// Newest wins: a capture that arrives before the previous one went out takes
