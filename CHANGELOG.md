@@ -11,6 +11,19 @@ deciding whether to take the update — not assembled from commit subjects.
 
 ## [Unreleased]
 
+## [2.10.2] - 2026-11-27
+
+### Fixed
+
+- **Remote screen no longer gets stuck on "Reconnecting…" after the other Mac's displays
+  change.** If the display you last chose came back under a new number, as a virtual display
+  does when the app that makes it recreates it, the other Mac kept trying to share a
+  display that was gone instead of its main one. The window never showed a picture and
+  never gave up. It now finds that display again by its permanent identity, falling back to
+  the main display when it is truly gone. The other Mac needs this version for the fix.
+- **A remote screen that connects but never shows a picture now stops and says so,** after
+  a minute, instead of reconnecting forever.
+
 ## [2.10.1] - 2026-10-20
 
 ### Fixed
@@ -465,7 +478,8 @@ captures a microphone raw, with no echo canceller of its own.
   as an NDI source on the local network, with a live preview, camera selection, macOS camera
   effects and statistics.
 
-[Unreleased]: https://github.com/manuelvegadev/OpenBeam/compare/v2.10.1...HEAD
+[Unreleased]: https://github.com/manuelvegadev/OpenBeam/compare/v2.10.2...HEAD
+[2.10.2]: https://github.com/manuelvegadev/OpenBeam/compare/v2.10.1...v2.10.2
 [2.10.1]: https://github.com/manuelvegadev/OpenBeam/compare/v2.10.0...v2.10.1
 [2.10.0]: https://github.com/manuelvegadev/OpenBeam/compare/v2.9.0...v2.10.0
 [2.9.0]: https://github.com/manuelvegadev/OpenBeam/compare/v2.8.2...v2.9.0
