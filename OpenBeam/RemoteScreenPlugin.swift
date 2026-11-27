@@ -26,14 +26,31 @@ enum RemoteScreenPreferences {
     private static let requestsRetinaKey = "remoteScreen.requestsRetina"
     private static let preferredDisplaysKey = "remoteScreen.preferredDisplays"
 
-    /// The host display last chosen for each peer, asked for again next time.
-    static func preferredDisplay(for peerID: String) -> UInt32? {
-        (UserDefaults.standard.dictionary(forKey: preferredDisplaysKey)?[peerID] as? Int).map(UInt32.init)
+    /// A host display as remembered: its ID, and its UUID when the host sent
+    /// one, which finds it again after its ID changes.
+    struct PreferredDisplay {
+        var id: UInt32
+        var uuid: String?
     }
 
-    static func setPreferredDisplay(_ id: UInt32, for peerID: String) {
+    /// The host display last chosen for each peer, asked for again next time.
+    static func preferredDisplay(for peerID: String) -> PreferredDisplay? {
+        switch UserDefaults.standard.dictionary(forKey: preferredDisplaysKey)?[peerID] {
+        case let id as Int:  // saved by 2.10.1 and earlier: the ID alone
+            return UInt32(exactly: id).map { PreferredDisplay(id: $0) }
+        case let saved as [String: Any]:
+            guard let id = (saved["id"] as? Int).flatMap(UInt32.init(exactly:)) else { return nil }
+            return PreferredDisplay(id: id, uuid: saved["uuid"] as? String)
+        default:
+            return nil
+        }
+    }
+
+    static func setPreferredDisplay(_ display: PreferredDisplay, for peerID: String) {
         var all = UserDefaults.standard.dictionary(forKey: preferredDisplaysKey) ?? [:]
-        all[peerID] = Int(id)
+        var saved: [String: Any] = ["id": Int(display.id)]
+        saved["uuid"] = display.uuid
+        all[peerID] = saved
         UserDefaults.standard.set(all, forKey: preferredDisplaysKey)
     }
 
@@ -165,10 +182,11 @@ final class RemoteScreenPlugin: @unchecked Sendable {
         let size = NSScreen.screens.map { retina ? $0.backingPixelSize : $0.nativePixelSize }
             .max { $0.width * $0.height < $1.width * $1.height }
             ?? CGSize(width: 1920, height: 1080)
+        let preferred = RemoteScreenPreferences.preferredDisplay(for: peerID)
         let request = ScreenRequestPayload(requestID: UUID().uuidString.lowercased(),
                                            maxWidth: Int(size.width), maxHeight: Int(size.height),
-                                           maxFPS: nil, displayID: RemoteScreenPreferences.preferredDisplay(for: peerID),
-                                           originID: identity.peerID)
+                                           maxFPS: nil, displayID: preferred?.id,
+                                           originID: identity.peerID, displayUUID: preferred?.uuid)
         guard let data = try? ClipSyncJSON.encoder.encode(request), send?(data, peerID) == true else { return false }
         var entry = viewing[peerID] ?? Viewing(requestID: request.requestID)
         entry.requestID = request.requestID
@@ -205,10 +223,10 @@ final class RemoteScreenPlugin: @unchecked Sendable {
                                                     aspect: CGSize(width: offer.display.width, height: offer.display.height),
                                                     showsStats: RemoteScreenPreferences.showsStats)
             made.onClose = { [weak self] in self?.windowClosed(peerID: peerID) }
-            made.onSelectDisplay = { [weak self, weak made] id in
+            made.onSelectDisplay = { [weak self, weak made] display in
                 guard let self, let sessionID = made?.viewer?.offer.sessionID else { return }
-                RemoteScreenPreferences.setPreferredDisplay(id, for: peerID)
-                let select = ScreenSelectPayload(sessionID: sessionID, displayID: id, originID: self.identity.peerID)
+                RemoteScreenPreferences.setPreferredDisplay(.init(id: display.id, uuid: display.uuid), for: peerID)
+                let select = ScreenSelectPayload(sessionID: sessionID, displayID: display.id, originID: self.identity.peerID)
                 if let data = try? ClipSyncJSON.encoder.encode(select) { _ = self.send?(data, peerID) }
             }
             window = made

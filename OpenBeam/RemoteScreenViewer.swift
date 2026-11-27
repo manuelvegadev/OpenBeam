@@ -577,7 +577,7 @@ final class RemoteScreenWindowController: NSWindowController, NSWindowDelegate {
     /// The user closed the window.
     var onClose: (() -> Void)?
     /// The user picked another host display.
-    var onSelectDisplay: ((UInt32) -> Void)?
+    var onSelectDisplay: ((ScreenDisplayInfo) -> Void)?
     private(set) var viewer: RemoteScreenViewer?
     private let picker = RemoteScreenDisplayPicker()
     private var pickerHide: DispatchWorkItem?
@@ -749,7 +749,7 @@ final class RemoteScreenWindowController: NSWindowController, NSWindowDelegate {
         guard id != picker.current else { return }
         picker.current = id  // at once; the host's confirmation follows
         picker.resetHighlight()
-        onSelectDisplay?(id)
+        if let display = picker.displays.first(where: { $0.id == id }) { onSelectDisplay?(display) }
     }
 
     /// Interactive, it takes the keyboard (← → Return Esc) and the pointer until

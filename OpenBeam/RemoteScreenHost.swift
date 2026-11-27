@@ -110,7 +110,7 @@ final class RemoteScreenHost: @unchecked Sendable {
     func open(request: ScreenRequestPayload, hostPeerID: String,
               display: CGDirectDisplayID = CGMainDisplayID()) throws -> ScreenOfferPayload {
         // The display the viewer asked for, if this Mac still has it.
-        displayID = request.displayID.flatMap { CGDisplayIsOnline($0) != 0 ? $0 : nil } ?? display
+        displayID = Self.requestedDisplay(request) ?? display
         inputSink?.use(display: displayID)
         self.request = request
         let captureSize = RemoteScreenCapture.fittedSize(display: displayID, maxWidth: request.maxWidth, maxHeight: request.maxHeight)
@@ -333,7 +333,7 @@ final class RemoteScreenHost: @unchecked Sendable {
     /// for a display that is gone. controlQueue only.
     private func startCapture() {
         guard !isEnded, !capturing, let request else { return }
-        guard CGDisplayIsOnline(displayID) != 0, CGDisplayIsActive(displayID) != 0 else {
+        guard Self.displayIDs(active: true).contains(displayID) else {
             let since = displayMissingSince ?? Date()
             displayMissingSince = since
             if Date().timeIntervalSince(since) > Self.displayGrace {
@@ -373,7 +373,7 @@ final class RemoteScreenHost: @unchecked Sendable {
     /// Switches the session to another display, keeping it running. controlQueue.
     func select(display id: CGDirectDisplayID) {
         controlQueue.async {
-            guard !self.isEnded, id != self.displayID, CGDisplayIsOnline(id) != 0,
+            guard !self.isEnded, id != self.displayID,
                   Self.displays().contains(where: { $0.id == id })
             else { return }
             hostLog.info("switching to display \(id, privacy: .public)")
@@ -389,20 +389,47 @@ final class RemoteScreenHost: @unchecked Sendable {
         }
     }
 
+    /// The online displays, or only the active (drawable, not asleep) ones.
+    /// Whether a display is still there is asked of these lists, never of
+    /// CGDisplayIsOnline or CGDisplayIsActive: they return -1, not 0, for an ID
+    /// that no longer exists, such as a virtual display's old ID after it was
+    /// recreated, so a `!= 0` test lets a gone display through.
+    private static func displayIDs(active: Bool) -> [CGDirectDisplayID] {
+        var ids = [CGDirectDisplayID](repeating: 0, count: 16)
+        var count: UInt32 = 0
+        let listed = active ? CGGetActiveDisplayList(16, &ids, &count) : CGGetOnlineDisplayList(16, &ids, &count)
+        return listed == .success ? Array(ids.prefix(Int(count))) : []
+    }
+
+    /// A display's UUID, which stays the same when its ID changes.
+    static func uuid(of id: CGDirectDisplayID) -> String? {
+        guard let uuid = CGDisplayCreateUUIDFromDisplayID(id)?.takeRetainedValue() else { return nil }
+        return CFUUIDCreateString(nil, uuid) as String?
+    }
+
+    /// The display a request asks for, if this Mac still has it: by UUID when
+    /// the viewer sends one, since an ID may now belong to nothing or to
+    /// another display; by ID from a viewer that does not.
+    static func requestedDisplay(_ request: ScreenRequestPayload) -> CGDirectDisplayID? {
+        let online = displayIDs(active: false)
+        if let wanted = request.displayUUID {
+            return online.first { uuid(of: $0) == wanted }
+        }
+        return request.displayID.flatMap { online.contains($0) ? $0 : nil }
+    }
+
     /// The displays this Mac can share, as `screen.displays` lists them:
     /// active ones, each mirror set once.
     static func displays() -> [ScreenDisplayInfo] {
-        var ids = [CGDirectDisplayID](repeating: 0, count: 16)
-        var count: UInt32 = 0
-        guard CGGetActiveDisplayList(16, &ids, &count) == .success else { return [] }
         let names = screenNames()
-        return ids.prefix(Int(count)).compactMap { id in
+        return displayIDs(active: true).compactMap { id in
             guard CGDisplayMirrorsDisplay(id) == kCGNullDirectDisplay else { return nil }
             let bounds = CGDisplayBounds(id)
             let pixels = RemoteScreenCapture.pixelSize(of: id)
             return ScreenDisplayInfo(id: id, name: names[id] ?? "Display", width: pixels.width, height: pixels.height,
                                      x: bounds.minX, y: bounds.minY, pointWidth: bounds.width, pointHeight: bounds.height,
-                                     refreshHz: CGDisplayCopyDisplayMode(id)?.refreshRate ?? 0, main: CGDisplayIsMain(id) != 0)
+                                     refreshHz: CGDisplayCopyDisplayMode(id)?.refreshRate ?? 0, main: CGDisplayIsMain(id) != 0,
+                                     uuid: uuid(of: id))
         }
     }
 

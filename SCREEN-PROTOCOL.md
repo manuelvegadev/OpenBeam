@@ -69,6 +69,7 @@ These are ClipSync v1 encrypted payloads (see *Payload Types* in the ClipSync sp
   "maxHeight": 1440,
   "maxFPS": 120,
   "displayID": 5,
+  "displayUUID": "6F1C2A9E-3B4D-4E5F-8A7B-1C2D3E4F5A6B",
   "originID": "<viewer peerID>"
 }
 ```
@@ -76,6 +77,7 @@ These are ClipSync v1 encrypted payloads (see *Payload Types* in the ClipSync sp
 - `maxWidth` × `maxHeight` is the viewer's target area in **physical pixels**, normally the panel it will show the host on. The host captures its display scaled to the **largest size that fits within it and keeps the host display's aspect ratio**, with both dimensions rounded down to even numbers.
 - `maxFPS` is optional. It is a ceiling: the host sends no more often than this, and otherwise sends a frame whenever its screen changes.
 - `displayID` is optional: the host display to share first, typically the one this viewer chose last time (see `screen.displays`). A host that no longer has it shares its main display.
+- `displayUUID` is optional: the same display by its UUID, sent when the host listed one. A display keeps its UUID when its ID changes (a virtual display recreated, a monitor reconnected), and its old ID may then name nothing or another display, so a host that receives `displayUUID` looks the display up by it and ignores `displayID`; it shares its main display when no display has that UUID. Hosts that do not know the field use `displayID`.
 
 ### `screen.offer` — host accepts
 
@@ -126,7 +128,8 @@ These are ClipSync v1 encrypted payloads (see *Payload Types* in the ClipSync sp
   "sessionID": "<base64 16 B>",
   "displays": [
     { "id": 5, "name": "Odyssey G85SB", "width": 6192, "height": 2592,
-      "x": 0, "y": 0, "pointWidth": 3096, "pointHeight": 1296, "refreshHz": 120, "main": true },
+      "x": 0, "y": 0, "pointWidth": 3096, "pointHeight": 1296, "refreshHz": 120, "main": true,
+      "uuid": "6F1C2A9E-3B4D-4E5F-8A7B-1C2D3E4F5A6B" },
     { "id": 1, "name": "Built-in Retina Display", "width": 3024, "height": 1964,
       "x": 3096, "y": 400, "pointWidth": 1512, "pointHeight": 982, "refreshHz": 120, "main": false }
   ],
@@ -138,6 +141,7 @@ These are ClipSync v1 encrypted payloads (see *Payload Types* in the ClipSync sp
 - Sent once both data connections are bound, and again whenever the set of displays, their arrangement, or the shared one changes.
 - `x`, `y`, `pointWidth`, `pointHeight` place each display in the host's desktop, in points, with the main display's top left at 0,0: enough for a viewer to draw the arrangement as the host's own display settings do. `width` and `height` are the display's pixels in its current mode.
 - Mirrored displays appear once. `current` is the display the frames show.
+- `uuid` is the display's UUID, stable while its `id` may change between sessions. Optional: older hosts leave it out. A viewer that remembers a display for later requests keeps both.
 
 ### `screen.select` — viewer asks for another display
 

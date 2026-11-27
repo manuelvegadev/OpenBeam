@@ -78,6 +78,10 @@ struct ScreenRequestPayload: Codable {
     /// The host display to show first, if it still has it; otherwise its main one.
     var displayID: UInt32?
     var originID: String
+    /// The same display by its UUID, which survives the display getting a new
+    /// ID (a virtual display recreated, a monitor reconnected). Preferred over
+    /// `displayID` by hosts that know it.
+    var displayUUID: String?
 }
 
 struct ScreenOfferPayload: Codable {
@@ -117,6 +121,8 @@ struct ScreenDisplayInfo: Codable, Equatable {
     var pointHeight: Double
     var refreshHz: Double
     var main: Bool
+    /// The display's UUID, stable while its ID may change. Absent from older hosts.
+    var uuid: String?
 }
 
 extension ScreenDisplayInfo {
