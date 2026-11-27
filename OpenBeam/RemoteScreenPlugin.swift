@@ -127,6 +127,8 @@ final class RemoteScreenPlugin: @unchecked Sendable {
         var timeout: DispatchWorkItem?
         /// While a dropped session is being re-established: when to give up.
         var reconnectUntil: Date?
+        /// The last session connected but ended before any frame arrived.
+        var endedWithoutPicture = false
         /// Where the window opens: the display the user asked from.
         var displayID: CGDirectDisplayID?
     }
@@ -200,8 +202,10 @@ final class RemoteScreenPlugin: @unchecked Sendable {
     }
 
     private func requestTimedOut(peerID: String, requestID: String) {
-        guard let entry = viewing[peerID], entry.requestID == requestID, entry.viewer == nil else { return }
+        guard var entry = viewing[peerID], entry.requestID == requestID, entry.viewer == nil else { return }
         if entry.reconnectUntil != nil {
+            entry.endedWithoutPicture = false  // now it isn't answering at all
+            viewing[peerID] = entry
             attemptReconnect(peerID)
         } else {
             finish(peerID, "\(name(of: peerID)) didn't answer", "Make sure OpenBeam is running on it.")
@@ -246,7 +250,6 @@ final class RemoteScreenPlugin: @unchecked Sendable {
         }
         entry.viewer = viewer
         entry.window = window
-        entry.reconnectUntil = nil
         viewing[peerID] = entry
         if isNew {
             window.showWindow(nil)
@@ -274,8 +277,15 @@ final class RemoteScreenPlugin: @unchecked Sendable {
         case .hostStopped, .failed:
             break
         }
-        pluginLog.info("session with \(peerID, privacy: .public) dropped (\(String(describing: end), privacy: .public)); reconnecting")
-        entry.reconnectUntil = Date().addingTimeInterval(Self.reconnectWindow)
+        // A session that showed a picture earns a fresh reconnect window; one
+        // that connected and failed before any frame does not, or a host that
+        // always fails the same way would keep "Reconnecting…" up forever.
+        let showedPicture = viewer.stats.hasReceivedFrame
+        entry.endedWithoutPicture = !showedPicture
+        if showedPicture || entry.reconnectUntil == nil {
+            entry.reconnectUntil = Date().addingTimeInterval(Self.reconnectWindow)
+        }
+        pluginLog.info("session with \(peerID, privacy: .public) dropped (\(String(describing: end), privacy: .public))\(showedPicture ? "" : " before any frame", privacy: .public); reconnecting")
         viewing[peerID] = entry
         entry.window?.showStatus("Reconnecting to \(name(of: peerID))…")
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.attemptReconnect(peerID) }
@@ -287,7 +297,12 @@ final class RemoteScreenPlugin: @unchecked Sendable {
     private func attemptReconnect(_ peerID: String) {
         guard let entry = viewing[peerID], entry.viewer == nil, let until = entry.reconnectUntil else { return }
         guard Date() < until else {
-            finish(peerID, "Lost \(name(of: peerID))'s screen", "It could not be reached again. It may be asleep or off this network.")
+            if entry.endedWithoutPicture {
+                finish(peerID, "Couldn't show \(name(of: peerID))'s screen",
+                       "It answered but never sent a picture of its screen. Quit and reopen OpenBeam on it, then try again.")
+            } else {
+                finish(peerID, "Lost \(name(of: peerID))'s screen", "It could not be reached again. It may be asleep or off this network.")
+            }
             return
         }
         if !sendRequest(to: peerID) {

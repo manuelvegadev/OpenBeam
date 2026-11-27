@@ -500,9 +500,18 @@ final class RemoteScreenStats: @unchecked Sendable {
 
     private let lock = NSLock()
     private var current = Snapshot()
+    private var anyReceived = false
     private var lastPresent: Int64 = 0
     private var inputSentNs: [UInt64: UInt64] = [:]  // seq → viewer time sent
     private var lastInputShown: UInt64 = 0
+
+    /// Whether the session has received a frame at all: one that ends before it
+    /// did connected but never showed the host's screen.
+    var hasReceivedFrame: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return anyReceived
+    }
 
     func inputSent(seq: UInt64, at ns: UInt64) {
         lock.lock()
@@ -516,6 +525,7 @@ final class RemoteScreenStats: @unchecked Sendable {
         current.width = width
         current.height = height
         current.received += 1
+        anyReceived = true
         current.bytes += bytes
         if whole { current.whole += 1 }
         lock.unlock()
